@@ -1,0 +1,2 @@
+﻿timestamp,label,risk_posture,bank_profile,strategy,n_loans,evamean,delta_eva_mean,capital_liberado_mean,pct_keep,pct_restructure,pct_sell
+20260118_141746,coord_micro_smoke_coordinator_desinversion,desinversion,desinversion,Plan de desinversión NPL,200,23.101561822708938,1307828.1088202267,1174687.7838337498,0.015,0.015,0.97

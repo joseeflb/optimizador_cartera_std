@@ -1,0 +1,10 @@
+{
+  "total_timesteps": 20000,
+  "seed": 42,
+  "hurdle_rate": 0.1,
+  "device": "auto",
+  "fast_debug": false,
+  "early_stop_count": 1,
+  "duration_minutes": 0.96,
+  "timestamp_end": "2025-11-10 13:04:42"
+}

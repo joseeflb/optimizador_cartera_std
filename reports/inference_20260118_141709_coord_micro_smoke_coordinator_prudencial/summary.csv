@@ -1,0 +1,2 @@
+﻿timestamp,label,risk_posture,bank_profile,strategy,n_loans,evamean,delta_eva_mean,capital_liberado_mean,pct_keep,pct_restructure,pct_sell
+20260118_141718,coord_micro_smoke_coordinator_prudencial,prudencial,prudente,Banco prudente,200,1429841.6158627712,4461515.622018848,523850.0591026393,0.05,0.92,0.03

@@ -1,0 +1,50 @@
+[
+  {
+    "timestamp":"20260118_141718",
+    "label":"coord_micro_smoke_coordinator_prudencial",
+    "risk_posture":"prudencial",
+    "bank_profile":"prudente",
+    "strategy":"Banco prudente",
+    "n_loans":200,
+    "evamean":1429841.6158627712,
+    "delta_eva_mean":4461515.6220188476,
+    "capital_liberado_mean":523850.0591026393,
+    "pct_keep":0.05,
+    "pct_restructure":0.92,
+    "pct_sell":0.03,
+    "source_file":"C:\\Users\\josef\\OneDrive - Universidad de Oviedo\\Escritorio\\optimizador_cartera_std\\optimizador_cartera_std\\reports\\inference_20260118_141709_coord_micro_smoke_coordinator_prudencial\\summary.csv",
+    "inference_id":"inference_20260118_141709_coord_micro_smoke_coordinator_prudencial"
+  },
+  {
+    "timestamp":"20260118_141732",
+    "label":"coord_micro_smoke_coordinator_balanceado",
+    "risk_posture":"balanceado",
+    "bank_profile":"balanceado",
+    "strategy":"Banco balanceado",
+    "n_loans":200,
+    "evamean":1414702.5914486938,
+    "delta_eva_mean":4446376.5976047702,
+    "capital_liberado_mean":524891.6426171531,
+    "pct_keep":0.08,
+    "pct_restructure":0.92,
+    "pct_sell":0.0,
+    "source_file":"C:\\Users\\josef\\OneDrive - Universidad de Oviedo\\Escritorio\\optimizador_cartera_std\\optimizador_cartera_std\\reports\\inference_20260118_141725_coord_micro_smoke_coordinator_balanceado\\summary.csv",
+    "inference_id":"inference_20260118_141725_coord_micro_smoke_coordinator_balanceado"
+  },
+  {
+    "timestamp":"20260118_141746",
+    "label":"coord_micro_smoke_coordinator_desinversion",
+    "risk_posture":"desinversion",
+    "bank_profile":"desinversion",
+    "strategy":"Plan de desinversión NPL",
+    "n_loans":200,
+    "evamean":23.1015618227,
+    "delta_eva_mean":1307828.1088202267,
+    "capital_liberado_mean":1174687.7838337498,
+    "pct_keep":0.015,
+    "pct_restructure":0.015,
+    "pct_sell":0.97,
+    "source_file":"C:\\Users\\josef\\OneDrive - Universidad de Oviedo\\Escritorio\\optimizador_cartera_std\\optimizador_cartera_std\\reports\\inference_20260118_141738_coord_micro_smoke_coordinator_desinversion\\summary.csv",
+    "inference_id":"inference_20260118_141738_coord_micro_smoke_coordinator_desinversion"
+  }
+]

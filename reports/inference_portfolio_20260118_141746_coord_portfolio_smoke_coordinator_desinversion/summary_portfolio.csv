@@ -1,0 +1,2 @@
+﻿timestamp,label,scenario,risk_posture,bank_profile,bank_strategy,n_steps,EVA_final,RWA_final,capital_liberado_total,num_loans_active_final,num_loans_closed_final,pct_steps_keep,pct_steps_sell,pct_steps_restruct,pct_steps_mix
+20260118_141746,coord_portfolio_smoke_coordinator_desinversion,baseline,desinversion,desinversion,Plan de desinversión NPL,10,-345337705.0332273,2238053453.5,0.0,200,0,0.0,0.0,0.0,1.0

@@ -1,0 +1,2 @@
+﻿timestamp,label,risk_posture,bank_profile,strategy,n_loans,evamean,delta_eva_mean,capital_liberado_mean,pct_keep,pct_restructure,pct_sell
+20260118_141732,coord_micro_smoke_coordinator_balanceado,balanceado,balanceado,Banco balanceado,200,1414702.5914486938,4446376.59760477,524891.6426171531,0.08,0.92,0.0

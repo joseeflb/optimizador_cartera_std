@@ -1,0 +1,8 @@
+OPTIMIZADOR DE CARTERAS — RESUMEN EJECUTIVO (RUN-LEVEL)
+================================================================================
+No baseline/best detectados; no se calculan mejoras.
+
+Métricas agregadas (media):
+ - evamean: 948,189.10
+ - delta_eva_mean: 3,405,240.11
+ - capital_liberado_mean: 741,143.16
