@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ============================================
 # agent/policy_inference.py — Inferencia de políticas PPO (Banco L1.5 + trazabilidad)
-# (CORREGIDO v3.6.1 · sale simulator v2.2 book-aware + harmonize + PTI/DSCR keys + p95 fix)
+# (CORREGIDO v3.6.2 · Logging FIX + Fire-Sale Threshold dinámico + Gate DSCR + KEEP boost)
 # ============================================
 
 """
@@ -11,21 +11,11 @@ Autor: José María Fernández-Ladreda Ballvé
 
 Heurística financiera PRIORITARIA + PPO solo como desempate en banda ambigua.
 
-PATCH v3.6.0 (crítico):
-- VecNormalize micro robusto:
-  * Defaults: vecnormalize_loan.pkl / vecnormalize_micro.pkl
-  * Fallback legacy: vecnormalize_final.pkl / best_model_vecnormalize.pkl
-  * Validación fuerte por shape: vn.obs_rms.mean.shape == env.observation_space.shape
-  * Si mismatch: se invalida VN y se continúa sin normalización (sin warnings repetitivos ni crashes)
-- Normalización coherente: se normaliza UNA sola vez (si VN existe) justo antes de model.predict()
-- CLI: añade --vn y --out-dir
-
-PATCH v3.6.1 (crítico):
-- Harmonize schema: monthly_* -> legacy + PTI/DSCR + book_value + loan_id
-- simulate_npl_price(): pasar pd, book_value y coverage_rate (si existen) para PnL book-aware
-- Leer correctamente percentiles desde price_for_sell["resumen"] (p5/p50/p95)
-- Fire-sale: preferir flag del simulador (price_ratio_book vs threshold_book) y fallback legacy
-- Reestructura: corregir keys PTI_post / DSCR_post (antes se leía PTI/DSCR inexistentes)
+PATCH v3.6.2 (CRÍTICO):
+- Logging: FileHandler explícito para 'logs/policy_inference.log' (soluciona logs vacíos).
+- Fire-sale: Threshold book-aware inyectado según postura (evita bloqueo masivo 200/200).
+- Gate DSCR: Usa DSCR_MIN de estrategia en vez de hardcode 1.0.
+- Scoring KEEP: Añadido bonus de opcionalidad para Secured/Low-LGD.
 """
 
 from __future__ import annotations
@@ -63,15 +53,23 @@ LOG_DIR = os.path.join(ROOT_DIR, "logs")
 REPORTS_DIR = os.path.join(ROOT_DIR, "reports")
 MODELS_DIR = os.path.join(ROOT_DIR, "models")
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
-    handlers=[
-        logging.FileHandler(os.path.join(LOG_DIR, "policy_inference.log"), encoding="utf-8"),
-        logging.StreamHandler(sys.stdout),
-    ],
-)
+# --- LOGGING FIX: Logger específico con FileHandler explícito ---
 logger = logging.getLogger("policy_inference")
+logger.setLevel(logging.INFO)
+if logger.hasHandlers():
+    logger.handlers.clear()
+
+_fh = logging.FileHandler(os.path.join(LOG_DIR, "policy_inference.log"), encoding="utf-8")
+_fh.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"))
+logger.addHandler(_fh)
+
+# Opcional: StreamHandler para ver output en consola
+_sh = logging.StreamHandler(sys.stdout)
+_sh.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"))
+logger.addHandler(_sh)
+
+logger.propagate = False  # Evitar duplicidad en main.log si se desea aislamiento, o True si se quiere todo centralizado
+
 
 # -------------------------------------------------------------
 # Imports RL y optimizadores
@@ -191,10 +189,25 @@ def _is_fire_sale_legacy(posture: str, pnl_sell: float, price: float, ead: float
     return False
 
 
-def _sale_pack_from_row(row: pd.Series) -> Dict[str, Any]:
+def _get_fire_sale_threshold_for_posture(posture: str) -> float:
+    """
+    Devuelve un threshold Price/Book razonable según la postura.
+    0.85 es demasiado alto para NPL (bloquea todo).
+    """
+    p = (posture or "").lower().strip()
+    if p == "prudencial":
+        return 0.40  # Exige recuperar al menos 40% del valor contable neto
+    elif p == "desinversion":
+        return 0.15  # Muy agresivo, acepta descuentos fuertes
+    else:  # balanceado
+        return 0.30
+
+
+def _sale_pack_from_row(row: pd.Series, posture: str) -> Dict[str, Any]:
     """
     ÚNICA fuente de verdad para simulación de venta NPL.
     Pasa book_value / coverage_rate si existen para fire-sale contable (Price/Book).
+    Pasa threshold específico por postura.
     """
     ead = _safe_float(row.get("EAD", 0.0))
     lgd = _safe_float(row.get("LGD", 0.60))
@@ -229,6 +242,9 @@ def _sale_pack_from_row(row: pd.Series) -> Dict[str, Any]:
     except Exception:
         secured = False
 
+    # FIRE-SALE FIX: pasar threshold según postura
+    thr_book = _get_fire_sale_threshold_for_posture(posture)
+
     return simulate_npl_price(
         ead=ead,
         lgd=lgd,
@@ -239,6 +255,8 @@ def _sale_pack_from_row(row: pd.Series) -> Dict[str, Any]:
         rating=rating,
         book_value=book_value,
         coverage_rate=coverage_rate,
+        # Override del simulador para esta inferencia
+        fire_sale_price_ratio_book=thr_book
     )
 
 
@@ -283,8 +301,6 @@ def _pick_default_vn_loan_path() -> Optional[str]:
 def _vn_shape_matches_env(vn: VecNormalize, dummy_env: DummyVecEnv) -> bool:
     """
     Valida que el VecNormalize corresponde al mismo observation_space.
-    Regla:
-      vn.obs_rms.mean.shape == dummy_env.observation_space.shape
     """
     try:
         env_shape = getattr(dummy_env.observation_space, "shape", None)
@@ -720,6 +736,7 @@ def _run_inference_for_posture(
                 cond_eva = (eva_gain > 2.0 * EVA_MIN_IMPROVEMENT_EUR) and (eva_post > 0)
 
             cond_pti = (pti_post is None) or (float(pti_post) <= PTI_MAX)
+            # FIX GATE DSCR: usar DSCR_MIN en vez de hardcode 1.0
             cond_dscr = (dscr_post is None) or (float(dscr_post) >= DSCR_MIN)
             cond_cure = cured or (eva_post > base_eva and rwa_post <= base_rwa * 1.05)
 
@@ -737,10 +754,11 @@ def _run_inference_for_posture(
             finance_reason_steps.append(
                 f"PTI_post={float(pti_post):.2f} > {PTI_CRITICO:.2f} → esfuerzo inasumible, reestructura descartada."
             )
-        if dscr_post is not None and float(dscr_post) < 1.0:
+        # FIX GATE DSCR (block)
+        if dscr_post is not None and float(dscr_post) < DSCR_MIN:
             restruct_viable = False
             finance_reason_steps.append(
-                f"DSCR_post={float(dscr_post):.2f} < 1.0 → flujo insuficiente, reestructura descartada."
+                f"DSCR_post={float(dscr_post):.2f} < {DSCR_MIN:.2f} → flujo insuficiente, reestructura descartada."
             )
 
         # =========================================================
@@ -748,7 +766,8 @@ def _run_inference_for_posture(
         # =========================================================
         price_for_sell: Dict[str, Any] = {}
         try:
-            price_for_sell = _sale_pack_from_row(row)
+            # FIX: Pasar threshold dinámico según postura
+            price_for_sell = _sale_pack_from_row(row, posture)
         except Exception as e:
             logger.warning(f"⚠️ Error simulate_npl_price loan_id={loan_id}: {e}")
             price_for_sell = {}
@@ -848,6 +867,15 @@ def _run_inference_for_posture(
         score_keep = 0.0
         if base_eva > 0:
             score_keep += W_EVA * eva_pre_n
+        
+        # KEEP BOOST: Opcionalidad si es secured + Low LGD (evita descarte automático de KEEP)
+        if base_secured and base_lgd < 0.40:
+            score_keep += 0.05 * W_EVA  # bonus opcionalidad
+            
+        # KEEP BOOST: Zona gris (EVA negativo pero recuperable)
+        if base_eva < 0 and base_eva > EVA_STRONGLY_NEG_EUR:
+             score_keep += 0.02 * W_EVA
+
         scores["MANTENER"] = score_keep
 
         # RESTRUCTURE
@@ -1119,6 +1147,7 @@ def _run_inference_for_posture(
     export_styled_excel(df_dec, excel_path)
     logger.info(f"✅ Resultados exportados a {excel_path}")
 
+    # Summary enriquecido con diagnóstico
     summary_path = os.path.join(out_dir, summary_name)
     df_summary = pd.DataFrame(
         {
@@ -1134,6 +1163,9 @@ def _run_inference_for_posture(
             "pct_keep": [float((df_dec["decision_final"] == "MANTENER").mean())],
             "pct_restructure": [float((df_dec["decision_final"] == "REESTRUCTURAR").mean())],
             "pct_sell": [float((df_dec["decision_final"] == "VENDER").mean())],
+            # Diagnostic counters
+            "cnt_fire_sale_blocked": [int(df_dec["Sell_Blocked"].sum()) if "Sell_Blocked" in df_dec.columns else 0],
+            "cnt_risk_extremo": [int(df_dec["risk_extremo"].sum()) if "risk_extremo" in df_dec.columns else 0],
         }
     )
     df_summary.to_csv(summary_path, index=False, encoding="utf-8-sig")

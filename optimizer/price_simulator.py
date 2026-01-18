@@ -1,6 +1,7 @@
+# -*- coding: utf-8 -*-
 # ============================================
 # optimizer/price_simulator.py — Simulador de precio de venta (mercado secundario NPL)
-# v2.2 (bank-ready · anti-arbitraje · coherente con book & capital release)
+# v2.3 (FIXED · Override threshold · PnL vs Book)
 # ============================================
 from __future__ import annotations
 
@@ -444,8 +445,18 @@ def simulate_npl_price(
     price_ratio_recovery = float(precio_neto / base_recovery) if base_recovery > 0 else 0.0
     price_ratio_book = float(precio_neto / book_value) if book_value > 0 else 0.0
 
-    # Fire-sale de mercado vs book (umbral configurable; default 0.85)
-    fire_sale_threshold_book = float(getattr(CONFIG, "fire_sale_price_ratio_book", 0.85))
+    # ---------------------------------------------
+    # ✅ FIX CRÍTICO: Override Threshold desde kwargs
+    # ---------------------------------------------
+    # Permite al orquestador inyectar un umbral realista (ej. 0.30)
+    # evitando el default 0.85 que bloquea todo.
+    override_thr = kwargs.get("fire_sale_price_ratio_book")
+    if override_thr is not None and not _is_na(override_thr):
+         fire_sale_threshold_book = float(override_thr)
+    else:
+         # Fallback a config global si no se inyecta
+         fire_sale_threshold_book = float(getattr(CONFIG, "fire_sale_price_ratio_book", 0.85))
+
     fire_sale = bool(price_ratio_book < fire_sale_threshold_book)
 
     pd_str = "NA" if pd is None else f"{float(pd):.2f}"

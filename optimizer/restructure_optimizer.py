@@ -1,16 +1,7 @@
+# -*- coding: utf-8 -*-
 # ============================================
 # optimizer/restructure_optimizer.py — Optimizador híbrido (local + global)
-# v2.2 (BANK-READY · gates por segmento · cure no laxo · venta vs book coherente)
-#
-# Cambios clave:
-#  - ✅ Gates duros por segmento:
-#       * Retail/Mortgage/Consumer: PTI <= esfuerzo_max (obligatorio)
-#       * Corporate/SME/Bank/Sov/Other: DSCR >= dscr_min (obligatorio)
-#    (si falta la métrica necesaria -> NO se propone reestructura, evita “cheat code”)
-#  - ✅ PD interpretada como forward al horizonte (SENS.horizon_months), hazard consistente
-#  - ✅ Cure logic más bankable: RW baja SOLO si cured y tras cure_window_months
-#  - ✅ Auditoría: before/after + capital_release estimado por cambio EAD/RW
-#  - ✅ Venta: usa simulate_npl_price con book_value/coverage_rate; campos coherentes con price_simulator v2.x
+# v2.3 (FIXED · Coste de quita real · Gates por segmento · Cure conservador)
 # ============================================
 
 from __future__ import annotations
@@ -42,9 +33,9 @@ SENS = cfg.CONFIG.sensibilidad_reestructura
 COST_FUND_ANNUAL = 0.006
 
 try:
-    REWARD = cfg.CONFIG.reward_params
+    REWARD = cfg.CONFIG.reward
 except AttributeError:
-    REWARD = getattr(cfg.CONFIG, "reward", cfg.CONFIG)
+    REWARD = getattr(cfg.CONFIG, "reward_params", cfg.CONFIG)
 
 REG = cfg.CONFIG.regulacion
 if hasattr(REG, "required_total_capital_ratio") and callable(REG.required_total_capital_ratio):
@@ -344,9 +335,10 @@ def optimize_restructure(
     )
     best_extra: Dict[str, Any] = {}
 
-    # Admin/quita costs (one-off)
-    admin_cost_abs = float(getattr(REWARD, "restructure_admin_cost_abs", 0.0))
-    quita_cost_bps = float(getattr(REWARD, "restructure_cost_quita_bps", 0.0))
+    # Admin cost (one-off)
+    admin_cost_abs = float(getattr(REWARD, "restructure_admin_cost_abs", 250.0))
+    # Bps adicionales (operativos) sobre el monto
+    quita_cost_bps = float(getattr(REWARD, "restructure_cost_quita_bps", 40.0))
 
     rw_perf_guess = float(getattr(SENS, "rw_perf_guess", 1.0))
     pd_cure_th = float(getattr(SENS, "pd_cure_threshold", 0.20))
@@ -447,8 +439,21 @@ def optimize_restructure(
 
                 rwa_avg = float(np.mean(rwa_m)) if rwa_m else 0.0
 
-                # costes one-off
-                quita_cost = (quita_cost_bps / 10_000.0) * (quita * float(ead))
+                # -----------------------------------------------------
+                # ✅ FIX CRÍTICO: COSTE DE QUITA REAL (Economic Loss)
+                # -----------------------------------------------------
+                # La quita no es gratis. Representa una pérdida de principal.
+                # Valor económico neto estimado = EAD * (1 - LGD).
+                # Pérdida de principal = quita * Valor neto.
+                # Además sumamos el coste operacional (bps).
+                
+                net_exposure_est = ead * (1.0 - lgd)
+                principal_loss = quita * net_exposure_est
+                operational_loss = (quita_cost_bps / 10_000.0) * (quita * float(ead))
+                
+                quita_cost = principal_loss + operational_loss
+
+                # EVA total del escenario
                 eva_total = float(np.sum(eva_m)) - admin_cost_abs - quita_cost
 
                 years = horizon / 12.0
@@ -733,11 +738,10 @@ def optimize_heuristic(
             eva_restr = float(res_restr.get("EVA_post", -1e18))
             delta_eva_restr = float(res_restr.get("EVA_gain", 0.0))
 
-            coste_admin = float(getattr(REWARD, "restructure_admin_cost_abs", 0.0))
-            coste_quita = (float(getattr(REWARD, "restructure_cost_quita_bps", 0.0)) / 10_000.0) * (
-                float(res_restr.get("quita", 0.0)) * ead
-            )
-            coste_total = float(coste_admin + coste_quita)
+            # ✅ FIX: Recuperar costes reales del optimizador
+            coste_admin = float(res_restr.get("admin_cost", 0.0))
+            coste_quita = float(res_restr.get("quita_cost", 0.0))
+            coste_total = coste_admin + coste_quita
 
             sale_pack = None
             eva_sale = None
