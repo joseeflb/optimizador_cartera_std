@@ -8,3 +8,8 @@ __pycache__/
 # Logs
 logs/*.log
 *.log
+# Logs / runs / artifacts
+logs/
+reports/runs/
+reports/summary/charts/
+*.log
