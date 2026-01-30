@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ============================================
 # agent/policy_inference.py — Inferencia de políticas PPO (Banco L1.5 + trazabilidad)
-# (CORREGIDO v3.6.2 · Logging FIX + Fire-Sale Threshold dinámico + Gate DSCR + KEEP boost)
+# (CORREGIDO v3.6.3 · Logging FIX + Fire-Sale Threshold dinámico + Gate DSCR + KEEP boost + Safety)
 # ============================================
 
 """
@@ -11,11 +11,13 @@ Autor: José María Fernández-Ladreda Ballvé
 
 Heurística financiera PRIORITARIA + PPO solo como desempate en banda ambigua.
 
-PATCH v3.6.2 (CRÍTICO):
+PATCH v3.6.3 (CRÍTICO):
 - Logging: FileHandler explícito para 'logs/policy_inference.log' (soluciona logs vacíos).
-- Fire-sale: Threshold book-aware inyectado según postura (evita bloqueo masivo 200/200).
+- Fire-sale: Threshold book-aware inyectado según postura + severidad (evita bloqueo masivo 200/200).
 - Gate DSCR: Usa DSCR_MIN de estrategia en vez de hardcode 1.0.
 - Scoring KEEP: Añadido bonus de opcionalidad para Secured/Low-LGD.
+- EVA gain pct: denominador con suelo económico (evita “mejoras infinitas” cuando EVA≈0).
+- Robustez: control de NaN/inf en métricas y scores.
 """
 
 from __future__ import annotations
@@ -63,12 +65,11 @@ _fh = logging.FileHandler(os.path.join(LOG_DIR, "policy_inference.log"), encodin
 _fh.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"))
 logger.addHandler(_fh)
 
-# Opcional: StreamHandler para ver output en consola
 _sh = logging.StreamHandler(sys.stdout)
 _sh.setFormatter(logging.Formatter("%(asctime)s | %(levelname)-7s | %(name)s | %(message)s"))
 logger.addHandler(_sh)
 
-logger.propagate = False  # Evitar duplicidad en main.log si se desea aislamiento, o True si se quiere todo centralizado
+logger.propagate = False  # True si quieres también en main.log
 
 
 # -------------------------------------------------------------
@@ -99,12 +100,10 @@ class InferenceConfig:
     deterministic: bool = True
     tag: str = "policy"
     vecnormalize_path: Optional[str] = None
-    # "prudencial" | "balanceado" | "desinversion"
-    risk_posture: str = "balanceado"
+    risk_posture: str = "balanceado"  # "prudencial" | "balanceado" | "desinversion"
 
-    # NUEVO: evita creación de carpetas y exports intermedios
     persist_outputs: bool = True
-    output_dir: Optional[str] = None   # si persist_outputs=True, permite forzar ruta
+    output_dir: Optional[str] = None
 
 
 # -------------------------------------------------------------
@@ -147,9 +146,6 @@ def _safe_float(x, default: float = 0.0) -> float:
 
 
 def _num(row: pd.Series, key: str, default: float = 0.0) -> float:
-    """
-    Conversión numérica robusta (evita NaN contaminando PPO / scores).
-    """
     try:
         if key not in row.index:
             return float(default)
@@ -166,10 +162,6 @@ def _price_to_ead(price: float, ead: float) -> float:
 
 
 def _is_fire_sale_legacy(posture: str, pnl_sell: float, price: float, ead: float) -> bool:
-    """
-    Legacy fallback: fire-sale por precio/EAD y pérdida absoluta.
-    Preferimos el flag del simulador (price_ratio_book vs threshold_book) cuando exista.
-    """
     posture = (posture or "balanceado").lower()
     if posture == "prudencial":
         max_loss = -50_000.0
@@ -189,28 +181,44 @@ def _is_fire_sale_legacy(posture: str, pnl_sell: float, price: float, ead: float
     return False
 
 
-def _get_fire_sale_threshold_for_posture(posture: str) -> float:
+def _get_fire_sale_threshold_for_posture(posture: str, *, secured: bool, dpd: float, lgd: float) -> float:
     """
-    Devuelve un threshold Price/Book razonable según la postura.
-    0.85 es demasiado alto para NPL (bloquea todo).
+    Threshold Price/Book calibrado para NPL:
+    - prudencial: bloquea ventas MUY castigadas (no “casi todas”)
+    - balanceado: algo más permisivo
+    - desinversion: muy permisivo
+    Ajustes: secured / dpd alto / lgd alto -> aceptamos menor Price/Book.
     """
     p = (posture or "").lower().strip()
-    if p == "prudencial":
-        return 0.40  # Exige recuperar al menos 40% del valor contable neto
-    elif p == "desinversion":
-        return 0.15  # Muy agresivo, acepta descuentos fuertes
-    else:  # balanceado
-        return 0.30
+    base = {
+        "prudencial": 0.28,
+        "balanceado": 0.22,
+        "desinversion": 0.15,
+    }.get(p, 0.22)
+
+    if secured:
+        base -= 0.02
+    if dpd >= 360:
+        base -= 0.02
+    if lgd >= 0.75:
+        base -= 0.02
+
+    return float(min(0.40, max(0.10, base)))
 
 
 def _sale_pack_from_row(row: pd.Series, posture: str) -> Dict[str, Any]:
-    """
-    ÚNICA fuente de verdad para simulación de venta NPL.
-    Pasa book_value / coverage_rate si existen para fire-sale contable (Price/Book).
-    Pasa threshold específico por postura.
-    """
     ead = _safe_float(row.get("EAD", 0.0))
     lgd = _safe_float(row.get("LGD", 0.60))
+    dpd = _safe_float(row.get("DPD", 180.0))
+
+    secured = False
+    try:
+        if pd.notna(row.get("secured", np.nan)):
+            secured = bool(row.get("secured"))
+    except Exception:
+        secured = False
+
+    thr_book = _get_fire_sale_threshold_for_posture(posture, secured=secured, dpd=dpd, lgd=lgd)
 
     pdv = row.get("PD", None)
     try:
@@ -218,7 +226,6 @@ def _sale_pack_from_row(row: pd.Series, posture: str) -> Dict[str, Any]:
     except Exception:
         pdv = None
 
-    dpd = _safe_float(row.get("DPD", 180.0))
     seg = str(row.get("segmento_banco", row.get("segment", "CORPORATE"))).strip()
     rating = str(row.get("rating", "BBB")).strip()
 
@@ -235,16 +242,6 @@ def _sale_pack_from_row(row: pd.Series, posture: str) -> Dict[str, Any]:
     except Exception:
         coverage_rate = None
 
-    secured = False
-    try:
-        if pd.notna(row.get("secured", np.nan)):
-            secured = bool(row.get("secured"))
-    except Exception:
-        secured = False
-
-    # FIRE-SALE FIX: pasar threshold según postura
-    thr_book = _get_fire_sale_threshold_for_posture(posture)
-
     return simulate_npl_price(
         ead=ead,
         lgd=lgd,
@@ -255,8 +252,7 @@ def _sale_pack_from_row(row: pd.Series, posture: str) -> Dict[str, Any]:
         rating=rating,
         book_value=book_value,
         coverage_rate=coverage_rate,
-        # Override del simulador para esta inferencia
-        fire_sale_price_ratio_book=thr_book
+        fire_sale_price_ratio_book=thr_book,
     )
 
 
@@ -264,13 +260,6 @@ def _sale_pack_from_row(row: pd.Series, posture: str) -> Dict[str, Any]:
 # VecNormalize robusto (MICRO)
 # -------------------------------------------------------------
 def _pick_default_vn_loan_path() -> Optional[str]:
-    """
-    Defaults seguros para LoanEnv:
-      1) vecnormalize_loan.pkl
-      2) vecnormalize_micro.pkl
-      3) legacy: vecnormalize_final.pkl
-      4) legacy2: best_model_vecnormalize.pkl
-    """
     cands = [
         os.path.join(MODELS_DIR, "vecnormalize_loan.pkl"),
         os.path.join(MODELS_DIR, "vecnormalize_micro.pkl"),
@@ -281,33 +270,24 @@ def _pick_default_vn_loan_path() -> Optional[str]:
 
     legacy = os.path.join(MODELS_DIR, "vecnormalize_final.pkl")
     if os.path.exists(legacy):
-        logger.warning(
-            "⚠️ Usando VN legacy para LOAN: models/vecnormalize_final.pkl. "
-            "Recomendado: guardar/renombrar como vecnormalize_loan.pkl."
-        )
+        logger.warning("⚠️ Usando VN legacy para LOAN: models/vecnormalize_final.pkl. Recomendado: vecnormalize_loan.pkl.")
         return legacy
 
     legacy2 = os.path.join(MODELS_DIR, "best_model_vecnormalize.pkl")
     if os.path.exists(legacy2):
-        logger.warning(
-            "⚠️ Usando VN legacy2 para LOAN: models/best_model_vecnormalize.pkl. "
-            "Recomendado: guardar/renombrar como vecnormalize_loan.pkl."
-        )
+        logger.warning("⚠️ Usando VN legacy2 para LOAN: models/best_model_vecnormalize.pkl. Recomendado: vecnormalize_loan.pkl.")
         return legacy2
 
     return None
 
 
 def _vn_shape_matches_env(vn: VecNormalize, dummy_env: DummyVecEnv) -> bool:
-    """
-    Valida que el VecNormalize corresponde al mismo observation_space.
-    """
     try:
         env_shape = getattr(dummy_env.observation_space, "shape", None)
         vn_mean = getattr(getattr(vn, "obs_rms", None), "mean", None)
         vn_shape = getattr(vn_mean, "shape", None)
         if env_shape is None or vn_shape is None:
-            return True  # no podemos comprobar: no bloqueamos
+            return True
         return tuple(env_shape) == tuple(vn_shape)
     except Exception:
         return True
@@ -328,15 +308,13 @@ def _load_vecnormalize_loan(vn_path: Optional[str], dummy_env: DummyVecEnv) -> O
             env_shape = getattr(dummy_env.observation_space, "shape", None)
             vn_mean = getattr(getattr(vn, "obs_rms", None), "mean", None)
             vn_shape = getattr(vn_mean, "shape", None)
-            logger.warning(
-                f"⚠️ VecNormalize LOAN INVALIDADO por mismatch de shape: env={env_shape} vs vn={vn_shape} | {vn_path}"
-            )
+            logger.warning(f"⚠️ VecNormalize LOAN INVALIDADO por mismatch: env={env_shape} vs vn={vn_shape} | {vn_path}")
             return None
 
         logger.info(f"🔄 VecNormalize LOAN cargado: {vn_path}")
         return vn
     except Exception as e:
-        logger.warning(f"⚠️ VecNormalize LOAN incompatible (shape mismatch u otro): {vn_path} | {e}")
+        logger.warning(f"⚠️ VecNormalize LOAN incompatible: {vn_path} | {e}")
         return None
 
 
@@ -375,23 +353,14 @@ def _segmento_id_from_any(row: pd.Series) -> int:
 
 def _build_raw_obs_row(row: pd.Series) -> np.ndarray:
     """
-    Observación RAW (1x10) en el orden cfg.FEATURE_COLUMNS:
-    [EAD, PD, LGD, RW, EVA, RONA, RORWA, rating_num, segmento_id, DPD/30]
+    IMPORTANTE: esto debe coincidir con LoanEnv._get_obs() (orden y variables).
+    Esta versión usa 10 features e incluye 'secured' como 0/1.
     """
     EAD = _num(row, "EAD", 0.0)
     PD = _num(row, "PD", 0.0)
     LGD = _num(row, "LGD", 0.0)
     RW = _num(row, "RW", 1.0)
     EVA = _num(row, "EVA", 0.0)
-
-    # RONA/RORWA: si no vienen, reconstruye consistentemente
-    if "RONA" in row.index and pd.notna(row.get("RONA")):
-        RONA = _num(row, "RONA", 0.0)
-    else:
-        rate = _num(row, "rate", 0.0)
-        COST_FUND = 0.006
-        NI = EAD * rate - PD * LGD * EAD - EAD * COST_FUND
-        RONA = NI / EAD if EAD > 0 else 0.0
 
     if "RORWA" in row.index and pd.notna(row.get("RORWA")):
         RORWA = _num(row, "RORWA", 0.0)
@@ -404,10 +373,18 @@ def _build_raw_obs_row(row: pd.Series) -> np.ndarray:
 
     rating_num = float(_rating_num(row.get("rating", "BBB")))
     segmento_id = float(_segmento_id_from_any(row))
+
+    secured = 0.0
+    try:
+        if pd.notna(row.get("secured", np.nan)):
+            secured = 1.0 if bool(row.get("secured")) else 0.0
+    except Exception:
+        secured = 0.0
+
     dpd = _num(row, "DPD", 120.0)
     DPD30 = dpd / 30.0
 
-    obs = np.array([EAD, PD, LGD, RW, EVA, RONA, RORWA, rating_num, segmento_id, DPD30], dtype=np.float32)
+    obs = np.array([EAD, PD, LGD, RW, EVA, RORWA, rating_num, segmento_id, secured, DPD30], dtype=np.float32)
     obs = np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0).astype(np.float32)
     return obs.reshape(1, -1)
 
@@ -419,14 +396,12 @@ def harmonize_portfolio_schema(df: pd.DataFrame) -> pd.DataFrame:
     df = df.copy()
     df.columns = [str(c).strip() for c in df.columns]
 
-    # --- loan_id robusto
     if cfg.ID_COL not in df.columns:
         if "id" in df.columns:
             df[cfg.ID_COL] = df["id"].astype(str)
         else:
             df[cfg.ID_COL] = [f"loan_{i}" for i in range(len(df))]
 
-    # --- map monthly_* -> legacy names usados por optimizadores
     if "ingreso_mensual" not in df.columns and "monthly_income" in df.columns:
         df["ingreso_mensual"] = df["monthly_income"]
     if "cashflow_operativo_mensual" not in df.columns and "monthly_cfo" in df.columns:
@@ -434,7 +409,6 @@ def harmonize_portfolio_schema(df: pd.DataFrame) -> pd.DataFrame:
     if "cuota_mensual" not in df.columns and "monthly_payment" in df.columns:
         df["cuota_mensual"] = df["monthly_payment"]
 
-    # --- PTI / DSCR: preferimos pre si existe; si no, derivamos desde monthly_*
     if "PTI" not in df.columns:
         if "PTI_pre" in df.columns:
             df["PTI"] = df["PTI_pre"]
@@ -447,7 +421,6 @@ def harmonize_portfolio_schema(df: pd.DataFrame) -> pd.DataFrame:
         elif ("monthly_cfo" in df.columns) and ("monthly_payment" in df.columns):
             df["DSCR"] = df["monthly_cfo"] / df["monthly_payment"].replace(0, np.nan)
 
-    # --- book_value: si no viene, aproximación consistente
     if "book_value" not in df.columns:
         if "coverage_rate" in df.columns and "EAD" in df.columns:
             cov = pd.to_numeric(df["coverage_rate"], errors="coerce")
@@ -458,7 +431,6 @@ def harmonize_portfolio_schema(df: pd.DataFrame) -> pd.DataFrame:
             lgd = pd.to_numeric(df["LGD"], errors="coerce").clip(0, 1)
             df["book_value"] = pd.to_numeric(df["EAD"], errors="coerce") * (1.0 - lgd)
 
-    # --- normalización mínima de segment
     if "segment" in df.columns:
         df["segment"] = df["segment"].astype(str).str.strip()
 
@@ -473,7 +445,6 @@ def load_portfolio_any(path: str) -> pd.DataFrame:
     df = pd.read_excel(path) if ext in (".xlsx", ".xls") else pd.read_csv(path)
     df.columns = [c.strip() for c in df.columns]
 
-    # ✅ Harmonize: aliases, PTI/DSCR si faltan, book_value, loan_id
     df = harmonize_portfolio_schema(df)
 
     required_min = [cfg.ID_COL, "EAD", "PD", "LGD", "RW", "EVA", "DPD"]
@@ -509,10 +480,6 @@ def load_portfolio_any(path: str) -> pd.DataFrame:
 
 
 def load_policy(model_path: str, cfg_inf: InferenceConfig) -> Tuple[PPO, Optional[VecNormalize]]:
-    """
-    Devuelve (model, vn_env) donde vn_env es el VecNormalize validado si existe, else None.
-    Importante: NO dependemos de env en PPO.load para normalizar; normalizamos explícitamente antes de predict().
-    """
     if not os.path.exists(model_path):
         raise FileNotFoundError(f"❌ Modelo PPO no encontrado: {model_path}")
 
@@ -564,14 +531,12 @@ def _run_inference_for_posture(
     hurdle = float(getattr(regulacion, "hurdle_rate", 0.0))
     ratio_total = float(regulacion.required_total_capital_ratio())
 
-    # Pesos RewardParams (por postura real)
     W_EVA = float(reward_cfg.w_eva)
     W_CAPITAL = float(reward_cfg.w_capital)
     W_PNL = float(reward_cfg.w_pnl)
     PENALTY_FIRE_SALE = float(reward_cfg.penalty_fire_sale)
     PNL_PENALTY_SCALE = float(reward_cfg.pnl_penalty_scale)
 
-    # Umbrales prudenciales (por postura real)
     EVA_STRONGLY_NEG_EUR = float(getattr(bank_strat, "eva_strongly_neg", -50_000.0))
     EVA_MIN_IMPROVEMENT_EUR = float(getattr(bank_strat, "eva_min_improvement", 10_000.0))
     EVA_AMBIGUOUS_BAND = float(getattr(bank_strat, "eva_ambiguous_band", 10_000.0))
@@ -583,7 +548,6 @@ def _run_inference_for_posture(
     EVA_MIN_IMPROVEMENT_PCT = 0.05
     RORWA_MARGIN = 0.002
 
-    # NPL: umbrales “riesgo extremo”
     PD_ALTO = 0.70
     LGD_ALTO = 0.70
 
@@ -594,7 +558,6 @@ def _run_inference_for_posture(
 
     df = load_portfolio_any(cfg_inf.portfolio_path)
 
-    # Cargar PPO (solo desempate) + VecNormalize validado
     model: Optional[PPO] = None
     vn_env: Optional[VecNormalize] = None
     try:
@@ -609,17 +572,17 @@ def _run_inference_for_posture(
 
         base_eva = _safe_float(row.get("EVA", 0.0))
         base_rorwa = _safe_float(row.get("RORWA", 0.0))
-        base_rwa = _safe_float(row.get("RWA", _safe_float(row.get("EAD", 0.0)) * _safe_float(row.get("RW", 1.0))))
         base_ead = _safe_float(row.get("EAD", 0.0))
+        base_rw = _safe_float(row.get("RW", 1.0))
+        base_rwa = _safe_float(row.get("RWA", base_ead * base_rw))
+
         base_rate = _safe_float(row.get("rate", 0.0))
         base_pd = _safe_float(row.get("PD", 0.0))
         base_lgd = _safe_float(row.get("LGD", 0.0))
         base_seg = row.get("segment", None)
         base_rat = row.get("rating", None)
-        base_rw = _safe_float(row.get("RW", 1.0))
         base_rona = _safe_float(row.get("RONA", row.get("Effective_RONA_pct", 0.0)))
 
-        # PATCH: campos base usados downstream (Coordinator)
         base_dpd = _safe_float(row.get("DPD", 120.0))
         base_secured = False
         try:
@@ -641,7 +604,6 @@ def _run_inference_for_posture(
 
         finance_reason_steps: List[str] = []
 
-        # 0) Propuesta de reestructuración
         restruct: Optional[Dict[str, Any]] = None
         try:
             restruct = optimize_restructure(
@@ -660,7 +622,6 @@ def _run_inference_for_posture(
             logger.warning(f"⚠️ Error optimize_restructure loan_id={loan_id}: {e}")
             restruct = None
 
-        # Normalizar salida reestructura (FIX: keys PTI_post/DSCR_post)
         eva_post = base_eva
         eva_gain = 0.0
         rorwa_post = base_rorwa
@@ -681,7 +642,6 @@ def _run_inference_for_posture(
             rorwa_gain = _safe_float(restruct.get("RORWA_gain", rorwa_post - base_rorwa))
             rwa_post = _safe_float(restruct.get("RWA_post", base_rwa))
 
-            # FIX: priorizar campos *_post; fallback legacy
             pti_post = restruct.get("PTI_post", restruct.get("PTI", None))
             dscr_post = restruct.get("DSCR_post", restruct.get("DSCR", None))
 
@@ -700,43 +660,35 @@ def _run_inference_for_posture(
             quita = restruct.get("quita", None)
             restruct_ok = bool(restruct.get("ok", False))
 
-        eva_gain_pct = abs(eva_gain) / (abs(base_eva) + 1e-6)
+        # EVA gain pct con suelo económico: evita “mejoras infinitas” cuando EVA≈0
+        den = max(abs(base_eva), 0.02 * max(base_ead, 1.0))
+        eva_gain_pct = abs(eva_gain) / (den + 1e-6)
+
         ambiguous_eva_band = (
             abs(base_eva) < EVA_AMBIGUOUS_BAND
             and EVA_STRONGLY_NEG_EUR < base_eva < EVA_MIN_IMPROVEMENT_EUR
         )
 
-        # 1) Estado financiero base
         if base_eva > 0 and base_rorwa >= (hurdle + RORWA_MARGIN):
-            finance_reason_steps.append(
-                f"EVA_pre={base_eva:,.0f}€ > 0 y RORWA_pre={base_rorwa:.2%} ≥ hurdle ({hurdle:.2%})."
-            )
+            finance_reason_steps.append(f"EVA_pre={base_eva:,.0f}€ > 0 y RORWA_pre={base_rorwa:.2%} ≥ hurdle ({hurdle:.2%}).")
             base_state = "BUENO"
         elif base_eva <= EVA_STRONGLY_NEG_EUR or base_rorwa < (hurdle - RORWA_MARGIN):
-            finance_reason_steps.append(
-                f"EVA_pre={base_eva:,.0f}€ muy bajo o RORWA_pre={base_rorwa:.2%} < hurdle-δ ({hurdle-RORWA_MARGIN:.2%})."
-            )
+            finance_reason_steps.append(f"EVA_pre={base_eva:,.0f}€ muy bajo o RORWA_pre={base_rorwa:.2%} < hurdle-δ ({hurdle-RORWA_MARGIN:.2%}).")
             base_state = "MALO"
         else:
-            finance_reason_steps.append(
-                f"Banda intermedia: EVA_pre={base_eva:,.0f}€, RORWA_pre={base_rorwa:.2%} ~ hurdle ({hurdle:.2%})."
-            )
+            finance_reason_steps.append(f"Banda intermedia: EVA_pre={base_eva:,.0f}€, RORWA_pre={base_rorwa:.2%} ~ hurdle ({hurdle:.2%}).")
             base_state = "AMBIGUO"
 
-        # 2) Viabilidad reestructuración (por postura real)
         restruct_viable = False
         if restruct is not None:
             if posture == "prudencial":
                 cond_eva = (eva_gain > EVA_MIN_IMPROVEMENT_EUR or eva_gain_pct > EVA_MIN_IMPROVEMENT_PCT)
             elif posture == "balanceado":
-                cond_eva = (eva_gain > EVA_MIN_IMPROVEMENT_EUR or eva_gain_pct > EVA_MIN_IMPROVEMENT_PCT) and (
-                    eva_post > min(0.0, base_eva)
-                )
-            else:  # desinversion
+                cond_eva = (eva_gain > EVA_MIN_IMPROVEMENT_EUR or eva_gain_pct > EVA_MIN_IMPROVEMENT_PCT) and (eva_post > min(0.0, base_eva))
+            else:
                 cond_eva = (eva_gain > 2.0 * EVA_MIN_IMPROVEMENT_EUR) and (eva_post > 0)
 
             cond_pti = (pti_post is None) or (float(pti_post) <= PTI_MAX)
-            # FIX GATE DSCR: usar DSCR_MIN en vez de hardcode 1.0
             cond_dscr = (dscr_post is None) or (float(dscr_post) >= DSCR_MIN)
             cond_cure = cured or (eva_post > base_eva and rwa_post <= base_rwa * 1.05)
 
@@ -748,25 +700,16 @@ def _run_inference_for_posture(
                 f"DSCR_post={dscr_post if dscr_post is not None else 'NA'}, cured={cured}."
             )
 
-        # Hard blocks por esfuerzo extremo
         if pti_post is not None and float(pti_post) > PTI_CRITICO:
             restruct_viable = False
-            finance_reason_steps.append(
-                f"PTI_post={float(pti_post):.2f} > {PTI_CRITICO:.2f} → esfuerzo inasumible, reestructura descartada."
-            )
-        # FIX GATE DSCR (block)
+            finance_reason_steps.append(f"PTI_post={float(pti_post):.2f} > {PTI_CRITICO:.2f} → esfuerzo inasumible, reestructura descartada.")
         if dscr_post is not None and float(dscr_post) < DSCR_MIN:
             restruct_viable = False
-            finance_reason_steps.append(
-                f"DSCR_post={float(dscr_post):.2f} < {DSCR_MIN:.2f} → flujo insuficiente, reestructura descartada."
-            )
+            finance_reason_steps.append(f"DSCR_post={float(dscr_post):.2f} < {DSCR_MIN:.2f} → flujo insuficiente, reestructura descartada.")
 
-        # =========================================================
-        # 2.bis) Simulación de venta NPL (FUENTE ÚNICA + p95 fix + book-aware)
-        # =========================================================
+        # Venta NPL (fuente única)
         price_for_sell: Dict[str, Any] = {}
         try:
-            # FIX: Pasar threshold dinámico según postura
             price_for_sell = _sale_pack_from_row(row, posture)
         except Exception as e:
             logger.warning(f"⚠️ Error simulate_npl_price loan_id={loan_id}: {e}")
@@ -776,13 +719,11 @@ def _run_inference_for_posture(
         pnl_sell = _safe_float(price_for_sell.get("pnl", 0.0))
         capital_lib_venta = _safe_float(price_for_sell.get("capital_liberado", base_rwa * ratio_total))
 
-        # p5/p50/p95 (FIX: salen de price_for_sell["resumen"])
         resumen = price_for_sell.get("resumen", {}) or {}
         p5_sale = _safe_float(resumen.get("p5", np.nan), default=np.nan)
         p50_sale = _safe_float(resumen.get("p50", np.nan), default=np.nan)
         p95_sale = _safe_float(resumen.get("p95", np.nan), default=np.nan)
 
-        # ratios (preferir simulator; fallback mínimo)
         price_ratio_ead = _safe_float(price_for_sell.get("price_ratio_ead", np.nan), default=np.nan)
         if (not np.isfinite(price_ratio_ead)) and (base_ead > 0):
             try:
@@ -793,12 +734,8 @@ def _run_inference_for_posture(
         price_ratio_book = _safe_float(price_for_sell.get("price_ratio_book", np.nan), default=np.nan)
         thr_book = _safe_float(price_for_sell.get("fire_sale_threshold_book", np.nan), default=np.nan)
 
-        # Fire-sale:
-        # - Triggered SIEMPRE (informativo en cualquier postura)
-        # - Enabled SOLO bloquea en prudencial/balanceado
         fire_sale_enabled = posture in ("prudencial", "balanceado")
 
-        # Preferente: si hay métricas book (simulador v2.2), usa su flag; si no, legacy
         fire_sale_source = "SIM"
         if (not np.isfinite(price_ratio_book)) or (not np.isfinite(thr_book)):
             fire_sale = _is_fire_sale_legacy(posture, pnl_sell=pnl_sell, price=precio_opt, ead=base_ead)
@@ -807,13 +744,10 @@ def _run_inference_for_posture(
             fire_sale = bool(price_for_sell.get("fire_sale", False))
             fire_sale_source = "SIM"
 
-        # Triggered = fire_sale (sea por SIM o LEGACY)
         fire_sale_triggered = bool(fire_sale)
 
-        # Bloqueo efectivo (solo en prudencial/balanceado)
         sell_blocked = bool(fire_sale_enabled and fire_sale_triggered)
         sell_blocked_reason = ""
-
         if sell_blocked:
             if fire_sale_source == "SIM":
                 prb_txt = f"{price_ratio_book:.2f}" if np.isfinite(price_ratio_book) else "NA"
@@ -823,17 +757,13 @@ def _run_inference_for_posture(
                 px_ead = _price_to_ead(precio_opt, base_ead)
                 px_txt = f"{px_ead:.2f}" if np.isfinite(px_ead) else "NA"
                 sell_blocked_reason = f"FIRE_SALE(legacy): px/EAD={px_txt} or P&L abs threshold"
-
             finance_reason_steps.append(f"Guardrail fire-sale: {sell_blocked_reason} → venta bloqueada.")
 
-        # Riesgo extremo NPL
         risk_extremo = (base_pd >= PD_ALTO and base_lgd >= LGD_ALTO and not restruct_viable)
         if risk_extremo:
-            finance_reason_steps.append(
-                f"Riesgo extremo NPL (PD={base_pd:.1%}, LGD={base_lgd:.1%}) sin reestructura viable → sesgo hacia VENDER."
-            )
+            finance_reason_steps.append(f"Riesgo extremo NPL (PD={base_pd:.1%}, LGD={base_lgd:.1%}) sin reestructura viable → sesgo hacia VENDER.")
 
-        # 3) Normalizaciones (dimensionless)
+        # Normalizaciones
         ead_scale = max(base_ead, 1.0)
         eva_pre_n = _safe_div(base_eva, ead_scale)
         deva_re_n = _safe_div((eva_post - base_eva), ead_scale)
@@ -848,7 +778,7 @@ def _run_inference_for_posture(
         else:
             sell_alpha = 0.6
 
-        # 3.4) Gating de venta
+        # Gating venta
         if bank_profile == cfg.BankProfile.PRUDENTE:
             sell_allowed = ((base_state == "MALO" and not restruct_viable and not ambiguous_eva_band) or risk_extremo)
         elif bank_profile == cfg.BankProfile.BALANCEADO:
@@ -856,29 +786,24 @@ def _run_inference_for_posture(
         else:
             sell_allowed = (base_eva < 0) or risk_extremo
 
-        # ✅ FIX: bloqueo por fire-sale solo si sell_blocked (prudencial/balanceado)
         if sell_blocked:
             sell_allowed = False
 
-        # 4) Scores (FINANCIAL)
+        # Scores
         scores: Dict[str, float] = {}
 
-        # KEEP
         score_keep = 0.0
         if base_eva > 0:
             score_keep += W_EVA * eva_pre_n
-        
-        # KEEP BOOST: Opcionalidad si es secured + Low LGD (evita descarte automático de KEEP)
+
         if base_secured and base_lgd < 0.40:
-            score_keep += 0.05 * W_EVA  # bonus opcionalidad
-            
-        # KEEP BOOST: Zona gris (EVA negativo pero recuperable)
+            score_keep += 0.05 * W_EVA
+
         if base_eva < 0 and base_eva > EVA_STRONGLY_NEG_EUR:
-             score_keep += 0.02 * W_EVA
+            score_keep += 0.02 * W_EVA
 
-        scores["MANTENER"] = score_keep
+        scores["MANTENER"] = float(score_keep)
 
-        # RESTRUCTURE
         if restruct is not None and restruct_ok and restruct_viable:
             delta_rwa_re = max(base_rwa - rwa_post, 0.0)
             capital_lib_re = delta_rwa_re * ratio_total
@@ -888,10 +813,9 @@ def _run_inference_for_posture(
             if cured and posture in ("prudencial", "balanceado"):
                 score_restruct += 0.10 * W_EVA * abs(eva_pre_n)
 
-            scores["REESTRUCTURAR"] = score_restruct
+            scores["REESTRUCTURAR"] = float(score_restruct)
 
-        # SELL
-        eva_gain_sell_n = _safe_div(-base_eva, ead_scale)  # EVA_post=0
+        eva_gain_sell_n = _safe_div(-base_eva, ead_scale)
         score_sell = sell_alpha * W_EVA * eva_gain_sell_n + W_CAPITAL * cap_rel_sell_n + W_PNL * pnl_scaled
 
         if base_eva > 0:
@@ -910,9 +834,13 @@ def _run_inference_for_posture(
             finance_reason_steps.append("Venta bloqueada por política/guardrails → score_sell desactivado.")
             score_sell = -1e12
 
-        scores["VENDER"] = score_sell
+        scores["VENDER"] = float(score_sell)
 
-        # 5) Decisión FINANCIAL (pre-PPO)
+        # Safety: evita NaN/inf en scores
+        for k, v in list(scores.items()):
+            if not np.isfinite(float(v)):
+                scores[k] = -1e12
+
         decision_financial = max(scores, key=scores.get)
         best_score = scores[decision_financial]
         sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
@@ -926,12 +854,10 @@ def _run_inference_for_posture(
             f"Mejor(fin): {decision_financial} (margen={score_margin:,.6f})."
         )
 
-        # Guardrail: no vender “BUENOS”
         if base_state == "BUENO" and decision_financial == "VENDER":
             finance_reason_steps.append("Guardrail: préstamo BUENO → no se vende; se fuerza MANTENER.")
             decision_financial = "MANTENER"
 
-        # 5.bis) Overrides por perfil (hard)
         decision_override: Optional[str] = None
         if base_eva >= EVA_MIN_IMPROVEMENT_EUR and dscr_base is not None and dscr_base >= DSCR_MIN:
             decision_override = "MANTENER"
@@ -948,7 +874,6 @@ def _run_inference_for_posture(
                     decision_override = "VENDER"
                     finance_reason_steps.append("Override PRUDENTE: sin reestructura viable → VENDER.")
 
-        # 6) PPO (solo desempate)
         decision_ppo: Optional[str] = None
         decision_final = decision_override or decision_financial
 
@@ -957,7 +882,6 @@ def _run_inference_for_posture(
             if abs(score_margin) < 0.0005 or ambiguous_eva_band:
                 raw_obs = _build_raw_obs_row(row)
                 try:
-                    # Normalización EXACTAMENTE una vez si VN existe
                     obs = vn_env.normalize_obs(raw_obs) if vn_env is not None else raw_obs
                     a_pred, _ = model.predict(obs, deterministic=cfg_inf.deterministic)
                     decision_ppo = _translate_action(int(np.squeeze(a_pred)))
@@ -996,7 +920,6 @@ def _run_inference_for_posture(
             "decision_final": decision_final,
             "final_rationale": final_rationale,
 
-            # ===== PATCH: campos base para Coordinator / auditoría =====
             "EAD": base_ead,
             "PD": base_pd,
             "LGD": base_lgd,
@@ -1017,7 +940,6 @@ def _run_inference_for_posture(
             "restruct_viable": bool(restruct_viable),
             "risk_extremo": bool(risk_extremo),
 
-            # fire-sale (informativo) + bloqueo (prudencial/balanceado)
             "fire_sale": bool(fire_sale),
             "fire_sale_source": str(fire_sale_source),
             "FireSale_Enabled": bool(fire_sale_enabled),
@@ -1031,34 +953,26 @@ def _run_inference_for_posture(
             "bank_profile": bank_profile.value,
             "bank_strategy": bank_strat.name,
 
-            # =========================================================
-            # SALE contrafactual (siempre disponible, aunque NO se venda)
-            # =========================================================
             "precio_optimo": precio_opt,
-            "pnl": pnl_sell,  # asumimos book-aware si el simulador lo es
+            "pnl": pnl_sell,
             "p5": p5_sale,
             "p50": p50_sale,
             "p95": p95_sale,
             "capital_release_cf": capital_lib_venta,
 
-            # ratios para coordinator
             "price_ratio_ead": price_ratio_ead,
 
-            # book-aware (bank-ready)
             "book_value": _safe_float(price_for_sell.get("book_value", np.nan), default=np.nan),
             "book_value_source": str(price_for_sell.get("book_value_source", "")),
             "price_ratio_book": _safe_float(price_for_sell.get("price_ratio_book", np.nan), default=np.nan),
             "fire_sale_threshold_book": _safe_float(price_for_sell.get("fire_sale_threshold_book", np.nan), default=np.nan),
 
-            # adicional útil si el simulador lo expone (si no, mantiene NaN)
             "pnl_book": _safe_float(price_for_sell.get("pnl_book", np.nan), default=np.nan),
 
-            # placeholders realized (recalculado después y en coordinator)
             "pnl_realized": 0.0,
             "capital_release_realized": 0.0,
         }
 
-        # legacy/compat: capital_liberado sigue existiendo
         decision["capital_liberado"] = 0.0
 
         if decision_final == "REESTRUCTURAR" and restruct is not None and restruct_viable:
@@ -1111,9 +1025,6 @@ def _run_inference_for_posture(
             capital_bloq = base_rwa * ratio_total
             finance_reason_steps += [f"Acción final MANTENER: capital bloqueado≈{capital_bloq:,.0f}€ (RWA_pre×ratio)."]
 
-        # =========================================================
-        # Realizado (micro-only). Coordinator lo recalcula por Accion_final final
-        # =========================================================
         if decision_final == "VENDER":
             decision["pnl_realized"] = float(decision.get("pnl", 0.0) or 0.0)
             decision["capital_release_realized"] = float(decision.get("capital_release_cf", 0.0) or 0.0)
@@ -1130,9 +1041,6 @@ def _run_inference_for_posture(
     df_dec = pd.DataFrame(decisions)
     df_dec = enforce_schema(df_dec)
 
-    # -----------------------------
-    # Persistencia (opcional)
-    # -----------------------------
     if (not bool(getattr(cfg_inf, "persist_outputs", True))) or (out_dir is None) or (not str(out_dir).strip()):
         return df_dec, "", ""
 
@@ -1147,7 +1055,6 @@ def _run_inference_for_posture(
     export_styled_excel(df_dec, excel_path)
     logger.info(f"✅ Resultados exportados a {excel_path}")
 
-    # Summary enriquecido con diagnóstico
     summary_path = os.path.join(out_dir, summary_name)
     df_summary = pd.DataFrame(
         {
@@ -1157,13 +1064,12 @@ def _run_inference_for_posture(
             "bank_profile": [bank_profile.value],
             "strategy": [bank_strat.name],
             "n_loans": [len(df_dec)],
-            "evamean": [float(df_dec["EVA_post"].mean())],
-            "delta_eva_mean": [float(df_dec["ΔEVA"].mean())],
-            "capital_liberado_mean": [float(df_dec["capital_liberado"].mean())],
+            "evamean": [float(df_dec["EVA_post"].mean()) if "EVA_post" in df_dec.columns else float(df_dec["EVA_pre"].mean())],
+            "delta_eva_mean": [float(df_dec["ΔEVA"].mean()) if "ΔEVA" in df_dec.columns else 0.0],
+            "capital_liberado_mean": [float(df_dec["capital_liberado"].mean()) if "capital_liberado" in df_dec.columns else 0.0],
             "pct_keep": [float((df_dec["decision_final"] == "MANTENER").mean())],
             "pct_restructure": [float((df_dec["decision_final"] == "REESTRUCTURAR").mean())],
             "pct_sell": [float((df_dec["decision_final"] == "VENDER").mean())],
-            # Diagnostic counters
             "cnt_fire_sale_blocked": [int(df_dec["Sell_Blocked"].sum()) if "Sell_Blocked" in df_dec.columns else 0],
             "cnt_risk_extremo": [int(df_dec["risk_extremo"].sum()) if "risk_extremo" in df_dec.columns else 0],
         }
@@ -1174,18 +1080,12 @@ def _run_inference_for_posture(
     return df_dec, excel_path, summary_path
 
 
-# -------------------------------------------------------------
-# API NUEVA: inferencia in-memory (NO exports / NO carpetas)
-# -------------------------------------------------------------
 def run_inference_df(cfg_inf: InferenceConfig) -> pd.DataFrame:
     cfg_local = dataclasses.replace(cfg_inf, persist_outputs=False)
     df_dec, _, _ = _run_inference_for_posture(cfg_local, out_dir=None, suffix=None)
     return df_dec
 
 
-# -------------------------------------------------------------
-# Ejecución principal (UNA postura) — legacy
-# -------------------------------------------------------------
 def run_inference(cfg_inf: InferenceConfig) -> str:
     if not bool(getattr(cfg_inf, "persist_outputs", True)):
         _ = run_inference_df(cfg_inf)
@@ -1199,9 +1099,6 @@ def run_inference(cfg_inf: InferenceConfig) -> str:
     return out_dir
 
 
-# -------------------------------------------------------------
-# Inferencia multi-postura (prudencial / balanceado / desinversión) — legacy
-# -------------------------------------------------------------
 def run_inference_multi_posture(cfg_base: InferenceConfig) -> List[str]:
     if not bool(getattr(cfg_base, "persist_outputs", True)):
         for postura in ("prudencial", "balanceado", "desinversion"):
@@ -1228,9 +1125,6 @@ def run_inference_multi_posture(cfg_base: InferenceConfig) -> List[str]:
     return outputs
 
 
-# -------------------------------------------------------------
-# CLI
-# -------------------------------------------------------------
 def parse_args() -> InferenceConfig:
     p = argparse.ArgumentParser(description="Inferencia de política PPO (STD Basilea III · Banco L1.5)")
     p.add_argument("--model", type=str, default=os.path.join(MODELS_DIR, "best_model.zip"))
@@ -1251,10 +1145,7 @@ def parse_args() -> InferenceConfig:
         help="Perfil de riesgo para esta inferencia (por defecto: balanceado)",
     )
 
-    # VN explícito (si no, aplica defaults seguros)
     p.add_argument("--vn", type=str, default="", help="Path VecNormalize LOAN (opcional).")
-
-    # Persistencia
     p.add_argument("--no-persist", action="store_true", default=False, help="No exporta ni crea carpetas (solo cálculo).")
     p.add_argument("--out-dir", type=str, default="", help="Carpeta de salida (solo si persist).")
 

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ============================================
 # optimizer/restructure_optimizer.py — Optimizador híbrido (local + global)
-# v2.3 (FIXED · Coste de quita real · Gates por segmento · Cure conservador)
+# v2.3.1 (FIXED · Quita = write-off real contra BOOK_VALUE · Outputs auditables)
 # ============================================
 
 from __future__ import annotations
@@ -147,6 +147,45 @@ def _rw_default_discrete(seg: cfg.Segmento, rating: str = "BBB") -> float:
 
 
 # -----------------------------
+# BOOK VALUE proxy (para quita/write-off real)
+# -----------------------------
+def _infer_book_value(
+    *,
+    ead: float,
+    lgd: float,
+    book_value: Optional[float] = None,
+    coverage_rate: Optional[float] = None,
+) -> Tuple[float, str]:
+    """
+    Devuelve (book_value_used, source).
+    Prioridad:
+      1) book_value si válido
+      2) coverage_rate -> EAD * (1 - coverage)
+      3) proxy -> EAD * (1 - LGD)
+    """
+    ead = float(max(0.0, ead))
+    lgd = float(np.clip(float(lgd), 0.0, 1.0))
+
+    if book_value is not None and (not _is_nan(book_value)):
+        bv = float(book_value)
+        if bv > 0:
+            # book_value debería estar típicamente <= EAD; lo acotamos
+            return float(np.clip(bv, 1e-9, max(ead, 1e-9))), "book_value"
+
+    if coverage_rate is not None and (not _is_nan(coverage_rate)) and ead > 0:
+        cr = float(coverage_rate)
+        if cr > 1.0:
+            cr = cr / 100.0
+        cr = float(np.clip(cr, 0.0, 1.0))
+        bv = ead * (1.0 - cr)
+        return float(np.clip(bv, 1e-9, max(ead, 1e-9))), "coverage_rate"
+
+    # fallback conservador
+    bv = ead * (1.0 - lgd)
+    return float(np.clip(bv, 1e-9, max(ead, 1e-9))), "proxy_ead_x_1_minus_lgd"
+
+
+# -----------------------------
 # PD forward al horizonte (hazard mensual consistente)
 # -----------------------------
 def hazard_from_pd_forward(pd_horizon: float, horizon_months: int) -> float:
@@ -214,7 +253,7 @@ def compute_eva_base(
     rw = float(rw)
 
     i_m = rate / 12.0
-    h_m = hazard_from_pd_forward(pd, horizon)  # PD forward al horizonte
+    h_m = hazard_from_pd_forward(pd, horizon)
     p_m = 1.0 - math.exp(-h_m)
 
     eva_m: List[float] = []
@@ -260,6 +299,10 @@ def optimize_restructure(
     segment: Optional[str] = None,
     rating: str = "BBB",
 
+    # ✅ NUEVO: contable para quita (write-off real)
+    book_value: Optional[float] = None,
+    coverage_rate: Optional[float] = None,
+
     # Compat:
     ingreso_mensual: float | None = None,                 # retail/mortgage
     cashflow_operativo_mensual: float | None = None,      # corporate
@@ -274,7 +317,6 @@ def optimize_restructure(
     seg_enum = _parse_segment(segment)
     rating_u = str(rating or "BBB").upper()
 
-    # RW discreto si no lo pasan (consistente con pipeline)
     if rw is None or not np.isfinite(_coerce_rw(rw)):
         rw = _rw_default_discrete(seg_enum, rating_u)
     rw = float(rw)
@@ -289,6 +331,9 @@ def optimize_restructure(
         horizon_months=horizon,
     )
 
+    # Book value usado para coste de quita (fuente única + proxy)
+    book_used, book_src = _infer_book_value(ead=float(ead), lgd=float(lgd), book_value=book_value, coverage_rate=coverage_rate)
+
     # Viabilidad por segmento: requerimos data real (no proxy) para gates duros
     is_retail = _segment_is_retail(seg_enum)
     is_corp = _segment_is_corporate(seg_enum)
@@ -301,10 +346,13 @@ def optimize_restructure(
             "ok": False,
             "msg": "sin income -> retail no viable",
             "segment": seg_enum.name,
+            "rating": rating_u,
             "EVA_base": float(eva_base),
             "RORWA_base": float(rorwa_base),
             "RWA_base": float(rwa_base),
             "EL_base_horizon": float(el_base),
+            "book_value_used": float(book_used),
+            "book_value_source": str(book_src),
         }
 
     if is_corp and (not cfo_ok):
@@ -312,10 +360,13 @@ def optimize_restructure(
             "ok": False,
             "msg": "sin CFO -> corporate no viable",
             "segment": seg_enum.name,
+            "rating": rating_u,
             "EVA_base": float(eva_base),
             "RORWA_base": float(rorwa_base),
             "RWA_base": float(rwa_base),
             "EL_base_horizon": float(el_base),
+            "book_value_used": float(book_used),
+            "book_value_source": str(book_src),
         }
 
     ingreso = float(ingreso_mensual) if ingreso_ok else float("nan")
@@ -337,19 +388,25 @@ def optimize_restructure(
 
     # Admin cost (one-off)
     admin_cost_abs = float(getattr(REWARD, "restructure_admin_cost_abs", 250.0))
-    # Bps adicionales (operativos) sobre el monto
+    # Bps adicionales (operativos) sobre el nominal perdonado
     quita_cost_bps = float(getattr(REWARD, "restructure_cost_quita_bps", 40.0))
 
     rw_perf_guess = float(getattr(SENS, "rw_perf_guess", 1.0))
     pd_cure_th = float(getattr(SENS, "pd_cure_threshold", 0.20))
     cure_window = int(max(0, int(getattr(SENS, "cure_window_months", 3))))
 
+    ead = float(ead)
+    lgd = float(np.clip(float(lgd), 0.0, 1.0))
+
     for plazo_anios in RESTR.plazo_anios_grid:
         n_meses = int(plazo_anios * 12)
 
         for tasa in RESTR.tasa_anual_grid:
             for quita in (RESTR.quita_grid if permite_quita else [0.0]):
-                if quita > max_quita:
+                quita = float(quita)
+                if quita > float(max_quita):
+                    continue
+                if quita < 0.0:
                     continue
 
                 ead_n = float(ead * (1.0 - quita))
@@ -365,37 +422,32 @@ def optimize_restructure(
                 h_post = float(max(h_post, 1e-12))
                 pd_post = float(np.clip(pd_forward_from_hazard(h_post, horizon), 1e-9, 0.999))
 
-                cuota = float(cuota_anualidad(ead_n, tasa, n_meses))
+                cuota = float(cuota_anualidad(ead_n, float(tasa), n_meses))
 
-                # -------------------------
                 # Gates duros por segmento
-                # -------------------------
                 pti = float("nan")
                 dscr = float("nan")
 
                 if is_retail:
                     pti = float(cuota / max(1e-6, ingreso))
-                    if pti > esfuerzo_max:
+                    if pti > float(esfuerzo_max):
                         continue
 
                 if is_corp:
                     dscr = float(cfo_m / max(1e-6, cuota))
-                    if dscr < dscr_min:
+                    if dscr < float(dscr_min):
                         continue
 
-                # Si es retail y además hay CFO (raro), o corp con income, lo dejamos como info, no gate
-                if not is_retail and ingreso_ok:
+                if (not is_retail) and ingreso_ok:
                     pti = float(cuota / max(1e-6, ingreso))
-                if not is_corp and cfo_ok:
+                if (not is_corp) and cfo_ok:
                     dscr = float(cfo_m / max(1e-6, cuota))
 
-                # -------------------------
                 # Simulación de EVA mensual (con amortización)
-                # -------------------------
                 saldo = float(ead_n)
-                i_m = float(tasa / 12.0)
+                i_m = float(float(tasa) / 12.0)
 
-                h_m = float(h_post)  # hazard mensual post (constante)
+                h_m = float(h_post)
                 p_m = 1.0 - math.exp(-h_m)
 
                 eva_m: List[float] = []
@@ -417,7 +469,7 @@ def optimize_restructure(
                     interes = saldo * i_m
                     fund = saldo * (COST_FUND_ANNUAL / 12.0)
 
-                    # Política de pagos: ventana de cura con interés-only para no “curar” por magia
+                    # Ventana de cura: interés-only (evita “cura mágica” por amortización inmediata)
                     pago = cuota if m > cure_window else interes
                     amort = max(pago - interes, 0.0)
                     saldo = max(saldo - amort, 0.0)
@@ -440,29 +492,24 @@ def optimize_restructure(
                 rwa_avg = float(np.mean(rwa_m)) if rwa_m else 0.0
 
                 # -----------------------------------------------------
-                # ✅ FIX CRÍTICO: COSTE DE QUITA REAL (Economic Loss)
+                # ✅ FIX CRÍTICO: QUITA = WRITE-OFF REAL CONTRA BOOK VALUE
                 # -----------------------------------------------------
-                # La quita no es gratis. Representa una pérdida de principal.
-                # Valor económico neto estimado = EAD * (1 - LGD).
-                # Pérdida de principal = quita * Valor neto.
-                # Además sumamos el coste operacional (bps).
-                
-                net_exposure_est = ead * (1.0 - lgd)
-                principal_loss = quita * net_exposure_est
-                operational_loss = (quita_cost_bps / 10_000.0) * (quita * float(ead))
-                
-                quita_cost = principal_loss + operational_loss
+                # writeoff_eur: pérdida contable inmediata del carrying amount (proporcional a la quita)
+                # C_quita: writeoff + coste operacional (bps sobre nominal perdonado)
+                forgiven_nominal = float(quita * ead)  # nominal perdonado
+                writeoff_eur = float(quita * book_used)  # carrying amount perdonado
+                operational_loss = float((quita_cost_bps / 10_000.0) * forgiven_nominal)
+                C_quita = float(writeoff_eur + operational_loss)
 
-                # EVA total del escenario
-                eva_total = float(np.sum(eva_m)) - admin_cost_abs - quita_cost
+                # EVA total del escenario (one-offs)
+                eva_total = float(np.sum(eva_m)) - float(admin_cost_abs) - float(C_quita)
 
                 years = horizon / 12.0
-                net_income_total = float(np.sum(ni_m)) - admin_cost_abs - quita_cost
+                net_income_total = float(np.sum(ni_m)) - float(admin_cost_abs) - float(C_quita)
                 net_income_annual = (net_income_total / years) if years > 0 else 0.0
                 rorwa_annual = (net_income_annual / rwa_avg) if rwa_avg > 0 else 0.0
 
                 if eva_total > best.EVA_post:
-                    # capital release aproximado (instantáneo) por cambio EAD/RW en cured/no-cured
                     rw_end = float(rw_perf_guess) if cured else float(rw)
                     rwa0_inst = float(ead * rw)
                     rwa1_inst = float(ead_n * rw_end)
@@ -492,8 +539,18 @@ def optimize_restructure(
                         "LGD_post": float(lgd_n),
                         "EAD_post": float(ead_n),
                         "RW_post_end": float(rw_end),
+
+                        # one-offs auditables
                         "admin_cost": float(admin_cost_abs),
-                        "quita_cost": float(quita_cost),
+                        "writeoff_eur": float(writeoff_eur),
+                        "operational_loss_quita": float(operational_loss),
+                        "C_quita": float(C_quita),          # ✅ nombre pedido (commit)
+                        "quita_cost": float(C_quita),       # ✅ alias legacy
+
+                        # contable usado
+                        "book_value_used": float(book_used),
+                        "book_value_source": str(book_src),
+
                         "capital_release_est": float(capital_release_est),
                         "horizon_months": int(horizon),
                         "gate_type": "PTI" if is_retail else "DSCR",
@@ -520,8 +577,16 @@ def optimize_restructure(
             "LGD_post": None,
             "EAD_post": None,
             "RW_post_end": None,
+
             "admin_cost": float(admin_cost_abs),
+            "writeoff_eur": None,
+            "operational_loss_quita": None,
+            "C_quita": None,
             "quita_cost": None,
+
+            "book_value_used": float(book_used),
+            "book_value_source": str(book_src),
+
             "capital_release_est": 0.0,
             "horizon_months": int(horizon),
             "gate_type": "PTI" if is_retail else "DSCR",
@@ -533,8 +598,12 @@ def optimize_restructure(
     out["RORWA_base"] = float(rorwa_base)
     out["RWA_base"] = float(rwa_base)
     out["EL_base_horizon"] = float(el_base)
-    out["msg"] = "OK (mejora significativa)" if out.get("ok") else "sin mejora"
 
+    # compat: claves esperadas por policy_inference (si alguien sigue leyendo legacy)
+    out["EVA_gain"] = float(out.get("EVA_gain", float(out.get("EVA_post", 0.0)) - eva_base))
+    out["RORWA_gain"] = float(out.get("RORWA_gain", float(out.get("RORWA_post", 0.0)) - rorwa_base))
+
+    out["msg"] = "OK (mejora significativa)" if out.get("ok") else "sin mejora"
     return out
 
 
@@ -547,7 +616,6 @@ def _evaluate_sale_prudential(
     segment: Optional[str] = None,
     rating: str = "BBB",
     dpd: Optional[float] = None,
-    # contable
     book_value: Optional[float] = None,
     coverage_rate: Optional[float] = None,
 ) -> Dict[str, Any]:
@@ -572,82 +640,53 @@ def _evaluate_sale_prudential(
 
     precio_neto = float(price.get("precio_optimo", 0.0))
 
-    # --- Book usado realmente por el simulador (fuente única)
-    book_used = price.get("book_value", None)
-    if book_used is None or _is_nan(book_used) or float(book_used) <= 0:
-        # fallback coherente si por algún motivo no viniera
-        if coverage_rate is not None and (not _is_nan(coverage_rate)) and float(ead) > 0:
-            cr = float(coverage_rate)
-            if cr > 1.0:
-                cr = cr / 100.0
-            cr = float(np.clip(cr, 0.0, 1.0))
-            book_used = float(ead) * (1.0 - cr)
-        else:
-            book_used = float(ead) * (1.0 - float(np.clip(lgd, 0.0, 1.0)))
-    book_used = float(max(book_used, 1e-9))
-
-    # pnl contable vs ese book_used (el simulador ya devuelve pnl vs book; si no, lo derivamos)
+    book_used, _src = _infer_book_value(ead=float(ead), lgd=float(lgd), book_value=price.get("book_value", None), coverage_rate=coverage_rate)
     pnl_book = float(price.get("pnl", precio_neto - book_used))
 
-    # --- Price/Book ratio (no confundir con Price/EAD)
     ratio_pb = price.get("price_ratio_book", None)
     if ratio_pb is None or (isinstance(ratio_pb, float) and not np.isfinite(ratio_pb)):
         ratio_pb = float(precio_neto / book_used) if book_used > 0 else float("nan")
     ratio_pb = float(ratio_pb) if np.isfinite(ratio_pb) else float("nan")
 
-    # --- Threshold book-aware: NUNCA default 0.08
     thr_pb = price.get("fire_sale_threshold_book", None)
     if thr_pb is None or (isinstance(thr_pb, float) and not np.isfinite(thr_pb)):
         thr_pb = float(getattr(cfg.CONFIG.precio_venta, "fire_sale_price_ratio_book", 0.85))
     thr_pb = float(thr_pb)
 
     fire_sale = bool(price.get("fire_sale", False))
-    # Si por alguna razón no viene el flag, lo derivamos con ratio_pb
     if (not fire_sale) and np.isfinite(ratio_pb):
         fire_sale = bool(ratio_pb < thr_pb)
 
     gap_pb = float(max(0.0, thr_pb - ratio_pb)) if np.isfinite(ratio_pb) else 0.0
-
     penalty_fire_sale_w = float(getattr(REWARD, "penalty_fire_sale", 0.0))
     fire_sale_penalty_eur = float(penalty_fire_sale_w * float(ead) * gap_pb)
 
     eva_post_sale_adj = float(pnl_book - fire_sale_penalty_eur)
-
-    # Capital liberado: viene del simulador (RW discreto coherente).
     capital_liberado = float(price.get("capital_liberado", float(ead) * float(rw) * CAP_RATIO))
 
     return {
         "ok": True,
         "precio_optimo": float(precio_neto),
-
-        # ratios
         "price_ratio_ead": float(price.get("price_ratio_ead", (precio_neto / ead) if ead > 0 else 0.0)),
         "price_ratio_book": float(ratio_pb),
 
-        # fire-sale
         "fire_sale_threshold_book": float(thr_pb),
         "fire_sale": bool(fire_sale),
 
-        # contable
         "book_value": float(book_used),
-        "pnl": float(pnl_book),          # ✅ alias principal (pipeline)
-        "pnl_book": float(pnl_book),     # ✅ legacy/audit
+        "pnl": float(pnl_book),
+        "pnl_book": float(pnl_book),
 
-        # penalización
         "fire_sale_penalty_eur": float(fire_sale_penalty_eur),
         "EVA_post_sale": float(pnl_book),
         "EVA_post_sale_adj": float(eva_post_sale_adj),
 
-        # capital
-        "capital_liberado": float(capital_liberado),         # ✅ alias principal
-        "capital_liberado_venta": float(capital_liberado),   # ✅ legacy
+        "capital_liberado": float(capital_liberado),
+        "capital_liberado_venta": float(capital_liberado),
 
-        # percentiles si vienen
         "resumen": price.get("resumen", {}) or {},
-
         "sim_raw": price,
     }
-
 
 
 def optimize_heuristic(
@@ -673,7 +712,6 @@ def optimize_heuristic(
             dpd = float(getattr(row, "DPD", 180.0))
             loan_id = getattr(row, "loan_id", None)
 
-            # RW (si falta, derivarlo discreto por segmento)
             rw_in = getattr(row, "RW", None)
             seg_enum = _parse_segment(seg)
             rw = _coerce_rw(rw_in)
@@ -683,16 +721,12 @@ def optimize_heuristic(
                 rw = 1.00 if rw < 1.25 else 1.50
             rw = float(rw)
 
-            # -----------------------------
-            # compatibilidad con generator
-            # -----------------------------
             monthly_payment_pre = getattr(row, "monthly_payment", None)
             monthly_income = getattr(row, "monthly_income", None)
             monthly_cfo = getattr(row, "monthly_cfo", None)
             book_value = getattr(row, "book_value", None)
             coverage_rate = getattr(row, "coverage_rate", getattr(row, "coverage", None))
 
-            # legacy (datasets antiguos)
             ingreso_mensual_legacy = getattr(row, "ingreso_mensual", None)
             cfo_m_legacy = getattr(row, "cashflow_operativo_mensual", None)
 
@@ -701,7 +735,6 @@ def optimize_heuristic(
 
             cuota_pre = _to_float_or_nan(monthly_payment_pre)
 
-            # PTI_pre / DSCR_pre (si tengo data)
             pti_pre = float("nan")
             dscr_pre = float("nan")
             if not math.isnan(cuota_pre) and cuota_pre > 0:
@@ -728,6 +761,11 @@ def optimize_heuristic(
                 rw=rw,
                 segment=str(seg),
                 rating=str(rating),
+
+                # ✅ pasa contable para quita real
+                book_value=None if _is_nan(book_value) else float(book_value),
+                coverage_rate=None if _is_nan(coverage_rate) else float(coverage_rate),
+
                 ingreso_mensual=None if _is_nan(ingreso_mensual) else float(ingreso_mensual),
                 cashflow_operativo_mensual=None if _is_nan(cfo_m) else float(cfo_m),
                 esfuerzo_max=esfuerzo_max,
@@ -738,9 +776,8 @@ def optimize_heuristic(
             eva_restr = float(res_restr.get("EVA_post", -1e18))
             delta_eva_restr = float(res_restr.get("EVA_gain", 0.0))
 
-            # ✅ FIX: Recuperar costes reales del optimizador
             coste_admin = float(res_restr.get("admin_cost", 0.0))
-            coste_quita = float(res_restr.get("quita_cost", 0.0))
+            coste_quita = float(res_restr.get("C_quita", res_restr.get("quita_cost", 0.0)) or 0.0)
             coste_total = coste_admin + coste_quita
 
             sale_pack = None
@@ -748,7 +785,6 @@ def optimize_heuristic(
             eva_sale_adj = None
             delta_eva_sale_adj = None
 
-            # Venta sólo se evalúa cuando EVA base es negativa (heurística)
             if eva_base < 0.0:
                 sale_pack = _evaluate_sale_prudential(
                     ead=ead,
@@ -766,7 +802,6 @@ def optimize_heuristic(
                     eva_sale_adj = float(sale_pack["EVA_post_sale_adj"])
                     delta_eva_sale_adj = float(eva_sale_adj - eva_base)
 
-            # decisión local
             strategy = "MANTENER"
             eva_choice = float(eva_base)
             delta_eva_choice = 0.0
@@ -798,42 +833,35 @@ def optimize_heuristic(
 
             out_row: Dict[str, Any] = dict(res_restr)
 
-            # enriquecimiento audit: pre/post coherente + campos de entrada
             out_row.update(
                 {
                     "loan_id": loan_id,
 
-                    # inputs viabilidad
                     "monthly_payment_pre": None if math.isnan(cuota_pre) else float(cuota_pre),
                     "monthly_income": None if _is_nan(ingreso_mensual) else float(ingreso_mensual),
                     "monthly_cfo": None if _is_nan(cfo_m) else float(cfo_m),
                     "PTI_pre": None if math.isnan(pti_pre) else float(pti_pre),
                     "DSCR_pre": None if math.isnan(dscr_pre) else float(dscr_pre),
 
-                    # contable
                     "book_value": None if _is_nan(book_value) else float(book_value),
                     "coverage_rate": None if _is_nan(coverage_rate) else float(coverage_rate),
 
-                    # base
                     "EVA_base": float(eva_base),
                     "RORWA_base": float(rorwa_base),
                     "RWA_base": float(rwa_base),
 
-                    # candidatos
                     "EVA_restr": float(eva_restr) if np.isfinite(eva_restr) else None,
                     "ΔEVA_restr": float(delta_eva_restr),
                     "EVA_sale": eva_sale,
                     "EVA_sale_adj": eva_sale_adj,
                     "ΔEVA_sale_adj": delta_eva_sale_adj,
 
-                    # decisión
                     "strategy_finance": strategy,
                     "EVA_choice": float(eva_choice),
                     "ΔEVA_choice": float(delta_eva_choice),
                     "coste_total": float(coste_total),
                     "eff_ratio": float(eff_ratio),
 
-                    # venta: pack completo
                     "sale_pack": sale_pack,
                 }
             )
@@ -856,7 +884,6 @@ def optimize_heuristic(
     chosen_mask = np.zeros(len(out), dtype=int)
     spent = 0.0
 
-    # selección global por budget (greedy por eficiencia)
     for _, r in out_restr.iterrows():
         if float(r.get("ΔEVA_choice", 0.0)) <= 0:
             continue
@@ -865,7 +892,6 @@ def optimize_heuristic(
             continue
         if spent + coste_i <= budget:
             spent += coste_i
-            # marca por loan_id si existe; si no, cae al índice
             lid = r.get("loan_id", None)
             if lid is not None:
                 idxs = out.index[out["loan_id"] == lid]

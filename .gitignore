@@ -1,0 +1,10 @@
+﻿# Python bytecode
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Logs
+logs/*.log
+*.log

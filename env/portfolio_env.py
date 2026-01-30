@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 # ============================================
-# env/portfolio_env.py — PortfolioEnv v3.6 (micro↔macro aware, AUDIT-READY)
+# env/portfolio_env.py — PortfolioEnv v3.6.1 (micro↔macro aware, AUDIT-READY)
 # (NPL-Ready · Banco L1.5 · Perfiles de banco · Re-ranking con PPO micro + VN robusto)
 # ============================================
 """
 Entorno RL MACRO para optimización de CARTERAS NPL (Non-Performing Loans)
 Compatible con LoanEnv v6.3, simulate_npl_price y Basilea III STD.
 
-Hardening v3.6 (correcciones relevantes):
+Hardening v3.6.1 (correcciones relevantes):
   - ✅ Evita “stale aliases” import-time: bank_profile / bank_strategy / reward_cfg se refrescan en reset().
   - ✅ Micro re-ranking compatible con PolicyAdapter (micro ya normaliza):
       * Si ppo_micro expone atributos tipo adapter (model/vecnorm), NO re-normalizamos aquí.
@@ -17,10 +17,20 @@ Hardening v3.6 (correcciones relevantes):
       * truncated = time-limit (max_steps) (solo si NOT terminated)
   - ✅ Maintain coherente con cured:
       * si cured=True → DPD se mantiene en 0 (no vuelve a delinquir por “time tick”)
-  - ✅ Guardrails fire-sale:
+  - ✅ Guardrails fire-sale calibrados y coherentes:
       * Se evalúa contra BOOK VALUE (price/book) + pérdida contable, no solo price/EAD
       * Bloqueo prudente/balanceado salvo desinversión (o allow_fire_sale=True)
       * Umbral de pérdida en % de book (no € fijo): max_loss_eur = -max_loss_pct * book_value
+      * Thresholds realistas por defecto (no 0.90/0.85), evitando “fire-sale siempre”
+  - ✅ Reestructura económicamente seria dentro del macro env:
+      * Coste de quita incluye write-off (quita * book_value) + (opcional) bps operativos + admin abs
+      * book_value se actualiza tras quita (consistencia para futuras ventas)
+  - ✅ Macro steering sin repetir el mismo loan indefinidamente:
+      * Cooldown de “recently_touched” por loan_id (configurable)
+      * _select_topk evita loans tocados recientemente y hace fallback si se queda sin candidatos
+  - ✅ Logging step-by-step:
+      * Log de candidatos top-N y picks, con key y valores
+      * Handler a consola + fichero logs/portfolio_env.log (sin depender de basicConfig)
   - ✅ EL/NI coherentes con generador y LoanEnv:
       * PD se interpreta como forward a horizonte
       * Para NI/EVA: EL_annual = (PD*LGD*EAD)/horizon_years
@@ -51,6 +61,45 @@ logger = logging.getLogger("portfolio_env")
 # ---------------------------------------------------------------
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 MODELS_DIR = os.path.join(ROOT_DIR, "models")
+LOGS_DIR = os.path.join(ROOT_DIR, "logs")
+
+
+def _setup_portfolio_logger() -> None:
+    """
+    Logger robusto:
+      - StreamHandler (consola)
+      - FileHandler a logs/portfolio_env.log
+    No depende de basicConfig (evita ficheros vacíos / handlers no configurados).
+    """
+    if getattr(logger, "_portfolio_env_configured", False):
+        return
+
+    logger.setLevel(logging.INFO)
+    logger.propagate = True  # para que también caiga en main.log si el root está configurado
+
+    fmt = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
+
+    # Stream handler
+    if not any(isinstance(h, logging.StreamHandler) for h in logger.handlers):
+        sh = logging.StreamHandler()
+        sh.setFormatter(fmt)
+        logger.addHandler(sh)
+
+    # File handler
+    try:
+        os.makedirs(LOGS_DIR, exist_ok=True)
+        log_path = os.path.join(LOGS_DIR, "portfolio_env.log")
+        if not any(isinstance(h, logging.FileHandler) and getattr(h, "baseFilename", "") == log_path for h in logger.handlers):
+            fh = logging.FileHandler(log_path, encoding="utf-8")
+            fh.setFormatter(fmt)
+            logger.addHandler(fh)
+    except Exception as e:
+        logger.warning(f"⚠️ No se pudo configurar FileHandler para portfolio_env: {e}")
+
+    logger._portfolio_env_configured = True
+
+
+_setup_portfolio_logger()
 
 # Funding cost consistente con el resto del pipeline
 COST_FUND = 0.006
@@ -109,21 +158,17 @@ def _coerce_bank_profile(v: Any):
     y luego se compara contra cfg.BankProfile.<ENUM>. Si no se normaliza, las comparaciones
     fallan silenciosamente y el macro puede bloquear ventas/reestructuras por postura.
     """
-
     BP = getattr(cfg, "BankProfile", None)
     if BP is None:
-        # fallback ultra-defensivo: devuelve string normalizado
         s = "" if v is None else str(v)
         return s.strip().lower()
 
-    # ya es enum
     try:
         if isinstance(v, BP):
             return v
     except Exception:
         pass
 
-    # normaliza string
     s = "" if v is None else str(v)
     s = s.strip().lower()
     s = (
@@ -132,7 +177,6 @@ def _coerce_bank_profile(v: Any):
     )
     s = s.replace("-", "_").replace(" ", "_")
 
-    # mapeo tolerante
     if s in {"prudente", "prudencial", "prudent", "prudential"}:
         return BP.PRUDENTE
     if s in {"desinversion", "desinvertir", "divestment", "desinversionn"}:
@@ -140,7 +184,6 @@ def _coerce_bank_profile(v: Any):
     if s in {"balanceado", "balanced", "neutral"}:
         return BP.BALANCEADO
 
-    # último fallback
     return BP.BALANCEADO
 
 
@@ -180,6 +223,10 @@ class PortfolioEnv(gym.Env):
         self._refresh_cfg_aliases()
 
         self.top_k_base = int(top_k)
+
+        # ✅ anti-repetición macro
+        self._touched_last_step: Dict[str, int] = {}
+        self._touched_last_action: Dict[str, int] = {}
 
         # espacios
         self.observation_space = spaces.Box(
@@ -302,6 +349,43 @@ class PortfolioEnv(gym.Env):
         # ✅ capital carry config
         self.cost_of_capital = float(getattr(self.reg_cfg, "cost_of_capital", 0.12))
         self.dt_years = float(_cfg_get(self.env_cfg, "dt_years_portfolio", 1.0 / 12.0))
+
+        # ✅ anti-repetición + logging granular
+        self.touched_cooldown_steps = int(_cfg_get(self.env_cfg, "macro_touched_cooldown_steps", 1))
+        self.log_step_details = bool(_cfg_get(self.env_cfg, "portfolio_log_step_details", True))
+        self.log_top_n = int(_cfg_get(self.env_cfg, "portfolio_log_top_n", 8))
+
+    # -----------------------------------------------------------------
+    # ✅ Anti-repetición macro (recently_touched)
+    # -----------------------------------------------------------------
+    def _recently_touched_id(self, loan_id: str, cooldown_steps: Optional[int] = None) -> bool:
+        cd = int(self.touched_cooldown_steps if cooldown_steps is None else cooldown_steps)
+        if cd <= 0:
+            return False
+        last = self._touched_last_step.get(loan_id, None)
+        if last is None:
+            return False
+        return (self.steps - int(last)) <= cd
+
+    def _mark_touched(self, loan_id: str, action: int) -> None:
+        self._touched_last_step[loan_id] = int(self.steps)
+        self._touched_last_action[loan_id] = int(action)
+
+    def _log_candidates(self, tag: str, indices: List[int], key: str) -> None:
+        if not self.log_step_details:
+            return
+        if not indices:
+            logger.info(f"[step {self.steps}] {tag} candidates({key}) -> <none>")
+            return
+
+        loans = self.portfolio
+        parts: List[str] = []
+        for i in indices[: max(1, self.log_top_n)]:
+            l = loans[i]
+            lid = _as_str_id(l.get("loan_id"), f"loan_{i}")
+            v = _safe_float(l.get(key, 0.0), 0.0)
+            parts.append(f"{lid}:{v:,.4f}")
+        logger.info(f"[step {self.steps}] {tag} candidates({key}) -> " + ", ".join(parts))
 
     # -----------------------------------------------------------------
     # Micro: VN loader & validation
@@ -484,6 +568,8 @@ class PortfolioEnv(gym.Env):
 
             pdv = float(self.rng.uniform(0.30, 0.85))
             lgd = float(self.rng.uniform(0.40, 0.85))
+            cov = float(self.rng.uniform(0.10, 0.60))
+            book_value = float(max(ead * (1.0 - cov), 1e-9))
 
             st = {
                 "loan_id": f"synt_{i}",
@@ -492,6 +578,8 @@ class PortfolioEnv(gym.Env):
                 "EAD": ead,
                 "PD": pdv,
                 "LGD": lgd,
+                "coverage_rate": cov,
+                "book_value": book_value,
                 "DPD": 180.0,
                 "estado": "DEFAULT",
                 "closed": False,
@@ -531,7 +619,6 @@ class PortfolioEnv(gym.Env):
         }
         m: Dict[str, int] = dict(base)
 
-        # Mapear también seg.value si existe (robustez)
         try:
             for seg in cfg.Segmento:
                 key_name = str(getattr(seg, "name", "")).strip().upper()
@@ -543,7 +630,6 @@ class PortfolioEnv(gym.Env):
         except Exception:
             pass
 
-        # aliases típicos
         m.update({
             "LARGE CORPORATE": m.get("CORPORATE", 1),
             "CORP": m.get("CORPORATE", 1),
@@ -640,6 +726,20 @@ class PortfolioEnv(gym.Env):
         pdv = _safe_float(st.get("PD", 0.50), 0.50)
         lgd = _safe_float(st.get("LGD", 0.60), 0.60)
         rate = _safe_float(st.get("rate", 0.06), 0.06)
+
+        # coverage/book (robusto)
+        cov = _safe_float(st.get("coverage_rate", st.get("COVERAGE_RATE", 0.0)), 0.0)
+        if cov > 1.0:
+            cov = cov / 100.0
+        cov = float(np.clip(cov, 0.0, 1.0))
+        st["coverage_rate"] = float(cov)
+
+        book_in = st.get("book_value", st.get("BOOK_VALUE", None))
+        if book_in is None:
+            book_value = float(max(ead * (1.0 - cov), 1e-9))
+        else:
+            book_value = float(max(_safe_float(book_in, ead * (1.0 - cov)), 1e-9))
+        st["book_value"] = float(book_value)
 
         # RW: normalizar + discretizar (DEFAULT)
         rw_in = st.get("RW", None)
@@ -809,7 +909,7 @@ class PortfolioEnv(gym.Env):
         return [i for (i, _, _) in scored]
 
     # =====================================================================
-    #         SELECCIÓN TOP-K
+    #         SELECCIÓN TOP-K (con anti-repetición)
     # =====================================================================
     def _active_indices(self) -> List[int]:
         return [i for i, l in enumerate(self.portfolio) if not bool(l.get("closed", False))]
@@ -820,6 +920,9 @@ class PortfolioEnv(gym.Env):
         k: int,
         reverse: bool = False,
         condition: Optional[Callable[[Dict[str, Any]], bool]] = None,
+        *,
+        avoid_recently_touched: bool = True,
+        cooldown_steps: Optional[int] = None,
     ) -> List[int]:
         idxs = self._active_indices()
         loans = self.portfolio
@@ -832,6 +935,18 @@ class PortfolioEnv(gym.Env):
         filtered = [i for i in idxs if cond(i)]
         if not filtered:
             return []
+
+        # ✅ evita loans tocados recientemente (macro steering)
+        if avoid_recently_touched:
+            cd = self.touched_cooldown_steps if cooldown_steps is None else int(cooldown_steps)
+            fresh = []
+            for i in filtered:
+                lid = _as_str_id(loans[i].get("loan_id"), f"loan_{i}")
+                if not self._recently_touched_id(lid, cooldown_steps=cd):
+                    fresh.append(i)
+            # fallback si te quedas sin candidatos
+            if fresh:
+                filtered = fresh
 
         sorted_idx = sorted(
             filtered,
@@ -898,7 +1013,7 @@ class PortfolioEnv(gym.Env):
         loan["DSCR"] = float(np.clip(dscr, 0.0, 10.0))
 
     # =====================================================================
-    #                 REESTRUCTURAR
+    #                 REESTRUCTURAR (con write-off de quita)
     # =====================================================================
     def _apply_restructure(self, loan: Dict[str, Any]) -> Tuple[float, float]:
         eva0 = float(loan["EVA"])
@@ -907,6 +1022,13 @@ class PortfolioEnv(gym.Env):
         ead0 = float(loan["EAD"])
         ingreso = float(loan.get("ingreso_mensual", max(1.0, ead0 / 24_000)))
         cured0 = bool(loan.get("cured", False))
+
+        # book/cov robustos (para write-off)
+        cov = _safe_float(loan.get("coverage_rate", 0.0), 0.0)
+        if cov > 1.0:
+            cov = cov / 100.0
+        cov = float(np.clip(cov, 0.0, 1.0))
+        book_value0 = float(max(_safe_float(loan.get("book_value", ead0 * (1.0 - cov)), ead0 * (1.0 - cov)), 1e-9))
 
         best_gain = -1e18
         best_terms = None
@@ -920,7 +1042,8 @@ class PortfolioEnv(gym.Env):
 
         # ✅ costes postura-aware (fallback reward_cfg)
         admin_cost_abs = self._p("restructure_admin_cost_abs", float(getattr(self.reward_cfg, "restructure_admin_cost_abs", 0.0)))
-        quita_bps = self._p("restructure_cost_quita_bps", float(getattr(self.reward_cfg, "restructure_cost_quita_bps", 0.0)))
+        # bps operativos (opcional, pequeño). El write-off es el coste fuerte.
+        quita_bps = self._p("restructure_operational_quita_bps", float(getattr(self.reward_cfg, "restructure_cost_quita_bps", 0.0)))
 
         cf = loan.get("cashflow_operativo_mensual", None)
         cf_val = _safe_float(cf, 0.0) if cf is not None else None
@@ -956,9 +1079,13 @@ class PortfolioEnv(gym.Env):
                     el_ann_c = float(el_life_c / self.horizon_years)
                     ni_c = float(ead_c * tasa - el_ann_c - ead_c * COST_FUND)
 
+                    # ✅ coste serio: write-off de principal perdonado (sobre book)
+                    writeoff_cost = float(quita) * float(book_value0)
+                    # coste operativo bps (pequeño; opcional)
+                    op_cost = (float(quita_bps) / 10_000.0) * float(quita) * float(ead0)
                     admin = float(admin_cost_abs)
-                    quita_cost = (float(quita_bps) / 10_000.0) * (quita * ead0)
-                    ni_c -= (admin + quita_cost)
+
+                    ni_c -= (admin + writeoff_cost + op_cost)
 
                     rorwa_c = self._rorwa(ni_c, rwa_c)
                     eva_c = self._eva(rorwa_c, rwa_c)
@@ -966,7 +1093,7 @@ class PortfolioEnv(gym.Env):
                     gain = eva_c - eva0
                     if gain > best_gain:
                         best_gain = gain
-                        best_terms = {"plazo": plazo, "tasa": tasa, "quita": quita}
+                        best_terms = {"plazo": plazo, "tasa": tasa, "quita": quita, "writeoff_cost": writeoff_cost, "op_cost": op_cost}
                         best_updates = {
                             "EAD": float(ead_c),
                             "PD": float(pd_c),
@@ -987,6 +1114,9 @@ class PortfolioEnv(gym.Env):
                             "EL": float(el_life_c),
                             "EL_annual": float(el_ann_c),
                             "NI": float(ni_c),
+                            # book se reduce con quita (consistencia contable)
+                            "book_value": float(max(book_value0 * (1.0 - float(quita)), 1e-9)),
+                            "coverage_rate": float(cov),
                         }
 
         cure_bonus = 0.0
@@ -994,12 +1124,16 @@ class PortfolioEnv(gym.Env):
 
         if best_terms is not None:
             loan.update(best_updates)
-            restruct_cost = float(admin_cost_abs) + (float(quita_bps) / 10_000.0) * (float(best_terms["quita"]) * ead0)
+
+            # coste total (para auditoría): admin + writeoff + op_cost
+            restruct_cost = float(admin_cost_abs) + float(best_terms["writeoff_cost"]) + float(best_terms["op_cost"])
 
             # audit trail
             loan["restruct_plazo"] = float(best_terms["plazo"])
             loan["restruct_tasa"] = float(best_terms["tasa"])
             loan["restruct_quita"] = float(best_terms["quita"])
+            loan["restruct_writeoff_cost"] = float(best_terms["writeoff_cost"])
+            loan["restruct_op_cost"] = float(best_terms["op_cost"])
             loan["restruct_cost"] = float(restruct_cost)
             loan["estado"] = "REESTRUCTURADO"
 
@@ -1042,12 +1176,27 @@ class PortfolioEnv(gym.Env):
         Returns: (max_loss_pct_of_book, min_price_to_book)
 
         max_loss_eur = -max_loss_pct_of_book * book_value
+
+        Nota:
+          Defaults calibrados para NPL (Price/Book típicos 0.17–0.40),
+          para evitar clasificar “casi todo” como fire-sale.
         """
+        bs = getattr(self, "bank_strategy", None)
+
+        # Overrides por estrategia si existen (valen para todos los perfiles)
+        try:
+            v1 = getattr(bs, "sell_max_loss_pct_book", None) if bs is not None else None
+            v2 = getattr(bs, "sell_min_price_to_book", None) if bs is not None else None
+            if v1 is not None and v2 is not None:
+                return float(v1), float(v2)
+        except Exception:
+            pass
+
         if self.bank_profile == cfg.BankProfile.PRUDENTE:
-            return 0.15, 0.90
+            return 0.25, 0.30
         if self.bank_profile == cfg.BankProfile.BALANCEADO:
-            return 0.25, 0.85
-        return 0.45, 0.70  # DESINVERSION
+            return 0.40, 0.25
+        return 0.65, 0.18  # DESINVERSION
 
     def _apply_sell(self, loan: Dict[str, Any]) -> Tuple[float, float, float, bool]:
         """
@@ -1070,6 +1219,8 @@ class PortfolioEnv(gym.Env):
         secured = bool(loan.get("secured", False))
         rwa0 = float(loan["RWA"])
 
+        max_loss_pct, min_px_book = self._fire_sale_limits()
+
         # ✅ book/coverage robustos
         cov = _safe_float(loan.get("coverage_rate", 0.0), 0.0)
         if cov > 1.0:
@@ -1089,31 +1240,35 @@ class PortfolioEnv(gym.Env):
             rating=str(loan.get("rating", "BBB")).upper(),
             book_value=book_value,
             coverage_rate=cov,
+            # ✅ alinear fire-sale threshold del simulador con el guardrail macro
+            fire_sale_price_ratio_book=float(min_px_book),
         )
 
         pnl = 0.0
         sell_cost = 0.0
         capital_release = rwa0 * self.cap_ratio
         precio_optimo = 0.0
+        fire_sale_triggers = []
 
         if sim is not None:
             pnl = float(sim.get("pnl", 0.0))
             sell_cost = float(sim.get("coste_tx", 0.0))
             capital_release = float(sim.get("capital_liberado", rwa0 * self.cap_ratio))
             precio_optimo = float(sim.get("precio_optimo", 0.0))
+            fire_sale_triggers = sim.get("fire_sale_triggers", []) or []
 
         px_ead = (precio_optimo / ead0) if ead0 > 1e-9 else 0.0
         px_book = (precio_optimo / book_value) if book_value > 1e-9 else 0.0
 
-        max_loss_pct, min_px_book = self._fire_sale_limits()
         max_loss_eur = -float(max_loss_pct) * float(book_value)
-
         is_fire_sale = (px_book < float(min_px_book)) or (pnl <= float(max_loss_eur))
 
         # ✅ registrar SIEMPRE fire-sale (se venda o se bloquee)
         loan["Fire_Sale"] = bool(is_fire_sale)
+        loan["sell_min_px_book"] = float(min_px_book)
         loan["sell_max_loss_pct_book"] = float(max_loss_pct)
         loan["sell_max_loss_eur"] = float(max_loss_eur)
+        loan["sell_fire_sale_triggers"] = ";".join([str(x) for x in fire_sale_triggers]) if fire_sale_triggers else ""
 
         # Penalización fire-sale sobre P&L si vendes EVA positiva (guardrail “soft”)
         penalty_fire = self._p("penalty_fire_sale", 0.5)
@@ -1268,6 +1423,10 @@ class PortfolioEnv(gym.Env):
         # ✅ refrescar config/bank profile por si policy_inference ha hecho set_bank_profile sin reload
         self._refresh_cfg_aliases()
 
+        # ✅ limpiar “recently touched”
+        self._touched_last_step.clear()
+        self._touched_last_action.clear()
+
         # micro normalizer: solo re-inicializar si NO es adapter (y si el path pudiera cambiar)
         if not self._micro_is_adapter():
             self._init_micro_normalizer()
@@ -1302,6 +1461,15 @@ class PortfolioEnv(gym.Env):
                 "blocked_sell_ids": [],
             },
         }
+
+        if self.log_step_details:
+            prof = self.bank_profile
+            prof_str = getattr(prof, "value", None) or str(prof)
+            logger.info(
+                f"[reset] perfil={prof_str} | allow_fire_sale={self.allow_fire_sale} | "
+                f"cooldown={self.touched_cooldown_steps} | active_loans={len(loans)} | EVA0={eva0:,.0f}"
+            )
+
         return obs, info
 
     def _concentration_metrics(self, loans: List[Dict[str, Any]]) -> Tuple[float, float]:
@@ -1371,6 +1539,11 @@ class PortfolioEnv(gym.Env):
 
         top_k_eff = self._effective_top_k()
 
+        if self.log_step_details:
+            prof = self.bank_profile
+            prof_str = getattr(prof, "value", None) or str(prof)
+            logger.info(f"[step {self.steps}] action={action} | perfil={prof_str} | top_k_eff={top_k_eff} | active={len(active_idxs)} | EVA0={eva0:,.0f}")
+
         # ------------------------
         # APLICACIÓN ACCIONES
         # ------------------------
@@ -1379,14 +1552,20 @@ class PortfolioEnv(gym.Env):
                 self._apply_maintain(self.portfolio[i])
 
         elif action == 1:
-            idxs = self._select_topk("EVA", k=1, reverse=False)
+            idxs = self._select_topk("EVA", k=1, reverse=False, avoid_recently_touched=True)
             idxs = self._rank_candidates_with_micro(idxs, prefer="sell", tie_key="EVA", tie_desc=False)
+            self._log_candidates("SELL_1", idxs, "EVA")
+
             for i in idxs:
                 loan = self.portfolio[i]
+                if loan.get("closed", False):
+                    continue
                 loan_id = _as_str_id(loan.get("loan_id"), f"loan_{i}")
                 eva_loan = _safe_float(loan.get("EVA", 0.0), 0.0)
 
                 cap, c, pnl, sold = self._apply_sell(loan)
+                self._mark_touched(loan_id, action)
+
                 capital_release_total += cap
                 total_sell_cost += c
                 total_pnl += pnl
@@ -1399,14 +1578,20 @@ class PortfolioEnv(gym.Env):
                     blocked_sell_ids.append(loan_id)
 
         elif action == 2:
-            idxs = self._select_topk("EVA", k=top_k_eff, reverse=False)
+            idxs = self._select_topk("EVA", k=top_k_eff, reverse=False, avoid_recently_touched=True)
             idxs = self._rank_candidates_with_micro(idxs, prefer="sell", tie_key="EVA", tie_desc=False)
+            self._log_candidates("SELL_TOPK_EVA", idxs, "EVA")
+
             for i in idxs:
                 loan = self.portfolio[i]
+                if loan.get("closed", False):
+                    continue
                 loan_id = _as_str_id(loan.get("loan_id"), f"loan_{i}")
                 eva_loan = _safe_float(loan.get("EVA", 0.0), 0.0)
 
                 cap, c, pnl, sold = self._apply_sell(loan)
+                self._mark_touched(loan_id, action)
+
                 capital_release_total += cap
                 total_sell_cost += c
                 total_pnl += pnl
@@ -1419,13 +1604,20 @@ class PortfolioEnv(gym.Env):
                     blocked_sell_ids.append(loan_id)
 
         elif action == 3:
-            idxs = self._select_topk("EVA", k=1, reverse=False)
+            idxs = self._select_topk("EVA", k=1, reverse=False, avoid_recently_touched=True)
             idxs = self._rank_candidates_with_micro(idxs, prefer="restruct", tie_key="EVA", tie_desc=False)
+            self._log_candidates("RESTRUCT_1", idxs, "EVA")
+
             for i in idxs:
                 loan = self.portfolio[i]
+                if loan.get("closed", False):
+                    continue
                 loan_id = _as_str_id(loan.get("loan_id"), f"loan_{i}")
                 rwa_b = _safe_float(loan.get("RWA", 0.0), 0.0)
+
                 rc, cb = self._apply_restructure(loan)
+                self._mark_touched(loan_id, action)
+
                 rwa_a = _safe_float(loan.get("RWA", 0.0), 0.0)
                 cap_rel = max(rwa_b - rwa_a, 0.0) * self.cap_ratio
                 capital_release_total += cap_rel
@@ -1435,13 +1627,20 @@ class PortfolioEnv(gym.Env):
                 restructured_ids.append(loan_id)
 
         elif action == 4:
-            idxs = self._select_topk("EVA", k=top_k_eff, reverse=False)
+            idxs = self._select_topk("EVA", k=top_k_eff, reverse=False, avoid_recently_touched=True)
             idxs = self._rank_candidates_with_micro(idxs, prefer="restruct", tie_key="EVA", tie_desc=False)
+            self._log_candidates("RESTRUCT_TOPK_EVA", idxs, "EVA")
+
             for i in idxs:
                 loan = self.portfolio[i]
+                if loan.get("closed", False):
+                    continue
                 loan_id = _as_str_id(loan.get("loan_id"), f"loan_{i}")
                 rwa_b = _safe_float(loan.get("RWA", 0.0), 0.0)
+
                 rc, cb = self._apply_restructure(loan)
+                self._mark_touched(loan_id, action)
+
                 rwa_a = _safe_float(loan.get("RWA", 0.0), 0.0)
                 cap_rel = max(rwa_b - rwa_a, 0.0) * self.cap_ratio
                 capital_release_total += cap_rel
@@ -1451,14 +1650,20 @@ class PortfolioEnv(gym.Env):
                 restructured_ids.append(loan_id)
 
         elif action == 5:
-            idxs = self._select_topk("RORWA", k=1, reverse=False)
+            idxs = self._select_topk("RORWA", k=1, reverse=False, avoid_recently_touched=True)
             idxs = self._rank_candidates_with_micro(idxs, prefer="sell", tie_key="EVA", tie_desc=False)
+            self._log_candidates("SELL_1_RORWA", idxs, "RORWA")
+
             for i in idxs:
                 loan = self.portfolio[i]
+                if loan.get("closed", False):
+                    continue
                 loan_id = _as_str_id(loan.get("loan_id"), f"loan_{i}")
                 eva_loan = _safe_float(loan.get("EVA", 0.0), 0.0)
 
                 cap, c, pnl, sold = self._apply_sell(loan)
+                self._mark_touched(loan_id, action)
+
                 capital_release_total += cap
                 total_sell_cost += c
                 total_pnl += pnl
@@ -1471,14 +1676,20 @@ class PortfolioEnv(gym.Env):
                     blocked_sell_ids.append(loan_id)
 
         elif action == 6:
-            idxs = self._select_topk("RORWA", k=top_k_eff, reverse=False)
+            idxs = self._select_topk("RORWA", k=top_k_eff, reverse=False, avoid_recently_touched=True)
             idxs = self._rank_candidates_with_micro(idxs, prefer="sell", tie_key="EVA", tie_desc=False)
+            self._log_candidates("SELL_TOPK_RORWA", idxs, "RORWA")
+
             for i in idxs:
                 loan = self.portfolio[i]
+                if loan.get("closed", False):
+                    continue
                 loan_id = _as_str_id(loan.get("loan_id"), f"loan_{i}")
                 eva_loan = _safe_float(loan.get("EVA", 0.0), 0.0)
 
                 cap, c, pnl, sold = self._apply_sell(loan)
+                self._mark_touched(loan_id, action)
+
                 capital_release_total += cap
                 total_sell_cost += c
                 total_pnl += pnl
@@ -1491,13 +1702,20 @@ class PortfolioEnv(gym.Env):
                     blocked_sell_ids.append(loan_id)
 
         elif action == 7:
-            idxs = self._select_topk("PTI", k=1, reverse=True, condition=lambda l: not l.get("cured", False))
+            idxs = self._select_topk("PTI", k=1, reverse=True, condition=lambda l: not l.get("cured", False), avoid_recently_touched=True)
             idxs = self._rank_candidates_with_micro(idxs, prefer="restruct", tie_key="PTI", tie_desc=True)
+            self._log_candidates("RESTRUCT_1_PTI", idxs, "PTI")
+
             for i in idxs:
                 loan = self.portfolio[i]
+                if loan.get("closed", False):
+                    continue
                 loan_id = _as_str_id(loan.get("loan_id"), f"loan_{i}")
                 rwa_b = _safe_float(loan.get("RWA", 0.0), 0.0)
+
                 rc, cb = self._apply_restructure(loan)
+                self._mark_touched(loan_id, action)
+
                 rwa_a = _safe_float(loan.get("RWA", 0.0), 0.0)
                 cap_rel = max(rwa_b - rwa_a, 0.0) * self.cap_ratio
                 capital_release_total += cap_rel
@@ -1507,13 +1725,20 @@ class PortfolioEnv(gym.Env):
                 restructured_ids.append(loan_id)
 
         elif action == 8:
-            idxs = self._select_topk("PTI", k=top_k_eff, reverse=True, condition=lambda l: not l.get("cured", False))
+            idxs = self._select_topk("PTI", k=top_k_eff, reverse=True, condition=lambda l: not l.get("cured", False), avoid_recently_touched=True)
             idxs = self._rank_candidates_with_micro(idxs, prefer="restruct", tie_key="PTI", tie_desc=True)
+            self._log_candidates("RESTRUCT_TOPK_PTI", idxs, "PTI")
+
             for i in idxs:
                 loan = self.portfolio[i]
+                if loan.get("closed", False):
+                    continue
                 loan_id = _as_str_id(loan.get("loan_id"), f"loan_{i}")
                 rwa_b = _safe_float(loan.get("RWA", 0.0), 0.0)
+
                 rc, cb = self._apply_restructure(loan)
+                self._mark_touched(loan_id, action)
+
                 rwa_a = _safe_float(loan.get("RWA", 0.0), 0.0)
                 cap_rel = max(rwa_b - rwa_a, 0.0) * self.cap_ratio
                 capital_release_total += cap_rel
@@ -1525,15 +1750,22 @@ class PortfolioEnv(gym.Env):
         elif action == 9:
             idx_sell = self._select_topk(
                 "EVA", k=1, reverse=False,
-                condition=lambda l: _safe_float(l.get("EVA", 0.0), 0.0) < 0
+                condition=lambda l: _safe_float(l.get("EVA", 0.0), 0.0) < 0,
+                avoid_recently_touched=True,
             )
             idx_sell = self._rank_candidates_with_micro(idx_sell, prefer="sell", tie_key="EVA", tie_desc=False)
+            self._log_candidates("MIX_SELL_1_NEG_EVA", idx_sell, "EVA")
+
             for i in idx_sell:
                 loan = self.portfolio[i]
+                if loan.get("closed", False):
+                    continue
                 loan_id = _as_str_id(loan.get("loan_id"), f"loan_{i}")
                 eva_loan = _safe_float(loan.get("EVA", 0.0), 0.0)
 
                 cap, c, pnl, sold = self._apply_sell(loan)
+                self._mark_touched(loan_id, action)
+
                 capital_release_total += cap
                 total_sell_cost += c
                 total_pnl += pnl
@@ -1545,14 +1777,19 @@ class PortfolioEnv(gym.Env):
                 else:
                     blocked_sell_ids.append(loan_id)
 
-            idx_restr = self._select_topk("PTI", k=1, reverse=True, condition=lambda l: not l.get("cured", False))
+            idx_restr = self._select_topk("PTI", k=1, reverse=True, condition=lambda l: not l.get("cured", False), avoid_recently_touched=True)
             idx_restr = self._rank_candidates_with_micro(idx_restr, prefer="restruct", tie_key="PTI", tie_desc=True)
+            self._log_candidates("MIX_RESTRUCT_1_PTI", idx_restr, "PTI")
+
             for i in idx_restr:
                 if not self.portfolio[i].get("closed", False):
                     loan = self.portfolio[i]
                     loan_id = _as_str_id(loan.get("loan_id"), f"loan_{i}")
                     rwa_b = _safe_float(loan.get("RWA", 0.0), 0.0)
+
                     rc, cb = self._apply_restructure(loan)
+                    self._mark_touched(loan_id, action)
+
                     rwa_a = _safe_float(loan.get("RWA", 0.0), 0.0)
                     cap_rel = max(rwa_b - rwa_a, 0.0) * self.cap_ratio
                     capital_release_total += cap_rel
@@ -1569,8 +1806,10 @@ class PortfolioEnv(gym.Env):
                 k=self._effective_top_k(),
                 reverse=True,
                 condition=lambda l: _safe_float(l.get("EVA", 0.0), 0.0) < 0.0,
+                avoid_recently_touched=True,
             )
             neg_eva_idxs = self._rank_candidates_with_micro(neg_eva_idxs, prefer="sell", tie_key="EVA", tie_desc=False)
+            self._log_candidates("RULE_NEG_EVA_BIG_EAD", neg_eva_idxs, "EAD")
 
             for i in neg_eva_idxs:
                 l = self.portfolio[i]
@@ -1582,6 +1821,8 @@ class PortfolioEnv(gym.Env):
                     eva_loan = _safe_float(l.get("EVA", 0.0), 0.0)
 
                     cap, c, pnl, sold = self._apply_sell(l)
+                    self._mark_touched(loan_id, action)
+
                     capital_release_total += cap
                     total_sell_cost += c
                     total_pnl += pnl
@@ -1594,7 +1835,10 @@ class PortfolioEnv(gym.Env):
                         blocked_sell_ids.append(loan_id)
                 else:
                     rwa_b = _safe_float(l.get("RWA", 0.0), 0.0)
+
                     rc, cb = self._apply_restructure(l)
+                    self._mark_touched(loan_id, action)
+
                     rwa_a = _safe_float(l.get("RWA", 0.0), 0.0)
                     cap_rel = max(rwa_b - rwa_a, 0.0) * self.cap_ratio
                     capital_release_total += cap_rel
@@ -1744,6 +1988,12 @@ class PortfolioEnv(gym.Env):
                 "n_restructured": int(len(restructured_ids)),
             },
         }
+
+        if self.log_step_details:
+            logger.info(
+                f"[step {self.steps}] EVA1={eva1:,.0f} | EVA_gain={eva_gain:,.0f} | "
+                f"sold={len(sold_ids)} blocked={len(blocked_sell_ids)} restruct={len(restructured_ids)} | reward={r:.4f}"
+            )
 
         return obs, r, terminated, truncated, info
 

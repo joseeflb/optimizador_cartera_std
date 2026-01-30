@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 # ============================================
 # optimizer/price_simulator.py — Simulador de precio de venta (mercado secundario NPL)
-# v2.3 (FIXED · Override threshold · PnL vs Book)
+# v2.3.1 (FIXED · Override threshold robusto · Default realista · Triggers auditables · PnL vs Book)
 # ============================================
 from __future__ import annotations
 
@@ -62,7 +62,7 @@ def _norm_str(x: Any) -> str:
     s = str(x or "").strip().lower()
     s = (
         s.replace("á", "a").replace("é", "e").replace("í", "i")
-         .replace("ó", "o").replace("ú", "u").replace("ñ", "n")
+        .replace("ó", "o").replace("ú", "u").replace("ñ", "n")
     )
     return s
 
@@ -312,7 +312,12 @@ def simulate_npl_price(
         )
 
     if book_value is None:
-        book_value = kwargs.get("book_value") or kwargs.get("BOOK_VALUE") or kwargs.get("BookValue") or kwargs.get("book")
+        book_value = (
+            kwargs.get("book_value")
+            or kwargs.get("BOOK_VALUE")
+            or kwargs.get("BookValue")
+            or kwargs.get("book")
+        )
     if coverage_rate is None:
         coverage_rate = kwargs.get("coverage_rate") or kwargs.get("COVERAGE_RATE") or kwargs.get("coverage")
 
@@ -446,18 +451,28 @@ def simulate_npl_price(
     price_ratio_book = float(precio_neto / book_value) if book_value > 0 else 0.0
 
     # ---------------------------------------------
-    # ✅ FIX CRÍTICO: Override Threshold desde kwargs
+    # ✅ Fire-sale (Book-aware) + override robusto + triggers auditables
     # ---------------------------------------------
-    # Permite al orquestador inyectar un umbral realista (ej. 0.30)
-    # evitando el default 0.85 que bloquea todo.
-    override_thr = kwargs.get("fire_sale_price_ratio_book")
-    if override_thr is not None and not _is_na(override_thr):
-         fire_sale_threshold_book = float(override_thr)
+    override_thr = kwargs.get("fire_sale_price_ratio_book", None)
+    if override_thr is not None and (not _is_na(override_thr)):
+        fire_sale_threshold_book = float(override_thr)
     else:
-         # Fallback a config global si no se inyecta
-         fire_sale_threshold_book = float(getattr(CONFIG, "fire_sale_price_ratio_book", 0.85))
+        # Default REALISTA si no se inyecta (evita fire-sale “siempre” con 0.85)
+        fire_sale_threshold_book = float(getattr(CONFIG, "fire_sale_price_ratio_book", 0.30))
 
     fire_sale = bool(price_ratio_book < fire_sale_threshold_book)
+
+    fire_sale_triggers: List[str] = []
+    if fire_sale:
+        fire_sale_triggers.append("ratio_book<thr_book")
+    if dpd >= 720:
+        fire_sale_triggers.append("dpd>=720")
+    elif dpd >= 360:
+        fire_sale_triggers.append("dpd>=360")
+    if not bool(secured):
+        fire_sale_triggers.append("unsecured")
+    if book_source != "provided":
+        fire_sale_triggers.append(f"book_source={book_source}")
 
     pd_str = "NA" if pd is None else f"{float(pd):.2f}"
 
@@ -467,7 +482,8 @@ def simulate_npl_price(
         f"PD_prob={pd_str} | RW_disc={rw_disc:.2f} | DPD={dpd:.0f} | "
         f"Book={book_value:,.2f} ({book_source}) | Price_neto={precio_neto:,.2f} | "
         f"Price/EAD={price_ratio_ead:.3f} | Price/Book={price_ratio_book:.3f} | "
-        f"fire_sale={fire_sale} (thr={fire_sale_threshold_book:.2f})"
+        f"fire_sale={fire_sale} (thr={fire_sale_threshold_book:.2f}) | "
+        f"triggers={';'.join(fire_sale_triggers) if fire_sale_triggers else ''}"
     )
 
     return {
@@ -476,8 +492,9 @@ def simulate_npl_price(
         "precio_bruto": float(precio_bruto),
         "resumen": metrics,
 
-        # ✅ PnL contable (bank-ready)
-        "pnl": float(pnl_book),
+        # ✅ PnL contable (bank-ready) vs Book
+        "pnl": float(pnl_book),          # alias principal (pipeline)
+        "pnl_book": float(pnl_book),     # alias explícito (audit/legacy)
         "pnl_vs_recovery": float(pnl_vs_recovery),
 
         # capital release coherente con RWA=EAD*RW_disc y CAP_RATIO
@@ -490,6 +507,7 @@ def simulate_npl_price(
 
         "fire_sale": bool(fire_sale),
         "fire_sale_threshold_book": float(fire_sale_threshold_book),
+        "fire_sale_triggers": fire_sale_triggers,
 
         "book_value": float(book_value),
         "book_value_source": str(book_source),
