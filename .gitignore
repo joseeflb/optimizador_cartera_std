@@ -13,3 +13,8 @@ logs/
 reports/runs/
 reports/summary/charts/
 *.log
+# Backups locales
+*.bak
+*.bak2
+*.bak3
+_tmp/backup/
