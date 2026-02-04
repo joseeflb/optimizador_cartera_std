@@ -1,0 +1,14 @@
+﻿# Minimal deps to run tests.smoke_test (CI)
+numpy>=1.26,<3
+pandas>=2.1,<3
+scipy>=1.10,<2
+joblib>=1.3,<2
+tqdm>=4.66
+rich>=13,<14
+openpyxl>=3.1,<4
+
+gymnasium>=1.0,<2
+stable-baselines3>=2.3,<3
+torch>=2.1,<3
+
+pyarrow>=12,<23
