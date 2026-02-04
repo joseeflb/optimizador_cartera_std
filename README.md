@@ -1,5 +1,5 @@
 **POC — OPTIMIZADOR DE CARTERAS EN DEFAULT**
-
+![smoke](https://github.com/joseeflb/optimizador_cartera_std/actions/workflows/smoke.yml/badge.svg)
 Banco L1.5 · Basilea III Método Estándar
 
 
