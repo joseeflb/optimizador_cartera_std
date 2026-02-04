@@ -18,3 +18,6 @@ reports/summary/charts/
 *.bak2
 *.bak3
 _tmp/backup/
+# Reports/outputs generados (cualquier nivel dentro de reports/)
+reports/**/*.txt
+reports/**/*.xlsx
