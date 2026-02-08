@@ -7,11 +7,12 @@
 """
 MEJORAS CLAVE (bank-ready):
 - Export estable: enforce_schema() SIEMPRE antes de Excel/CSV.
-- Macro asigna SOLO loans “tocados” (sell/restructure). Resto => macro_action="NO_ASIGNADO".
+- Macro asigna SOLO loans “tocados” (sell/restructure). Resto => Macro_Assignment="NO_ASIGNADO".
 - Arbitraje explícito: si macro_selected y hay conflicto, MACRO gana salvo guardrails DUROS.
 - Fire-sale robusto:
     * Enabled por postura (prudencial/balanceado).
-    * Triggered si se cumple cualquiera: simulador flag, price/EAD < threshold, pnl/book < umbral, pnl_abs < umbral.
+    * Triggered si se cumple cualquiera: simulador flag, price/EAD < threshold,
+      pnl/book < umbral, pnl_abs < umbral, price/book < threshold_book (si existe).
 - RC10: Guardrail de viabilidad (PTI/DSCR faltantes) bloquea REESTRUCTURAR.
 - Contrafactuals mínimos coherentes:
     * capital_release_cf derivable con RWA_pre o EAD*RW y ratio_total (fallback 10.5%).
@@ -471,9 +472,9 @@ def harmonize_portfolio_schema(df: pd.DataFrame) -> pd.DataFrame:
             cov = np.where(cov > 1.0, cov / 100.0, cov)
             cov = pd.Series(cov).clip(0, 1)
             df["book_value"] = pd.to_numeric(df["EAD"], errors="coerce") * (1.0 - cov)
+
         elif "LGD" in df.columns and "EAD" in df.columns:
-            lgd = pd.to_numeric(df["LGD"], errors="coerce").clip(0, 1)
-            df["book_value"] = pd.to_numeric(df["EAD"], errors="coerce") * (1.0 - lgd)
+            df["book_value"] = df["EAD"] * (1.0 - df["LGD"].clip(0, 1))
 
     # --- normalización mínima de segment (para gates retail vs corp)
     if "segment" in df.columns:
@@ -630,7 +631,7 @@ def _cib_rationale_row(
         governance = "Guardrail override (missing PTI/DSCR)"
         return code, txt, governance
 
-    # SELL bloqueado por fire-sale (rationale)
+    # SELL bloqueado por fire-sale
     sell_requested = (accion_micro == "VENDER") or (macro_action == "VENDER")
     if sell_requested and accion_final != "VENDER" and fire_sale and rp_l != "desinversion":
         code = "RC02_SELL_BLOCKED_FIRE_SALE"
@@ -859,7 +860,7 @@ def _combine_decisions(
     n_steps: int,
     top_k: int,
 ) -> pd.DataFrame:
-    df = _ensure_loan_id_column(df_micro)
+    df = _ensure_loan_id_column(df_micro).copy()
 
     # Preservar micro
     if "Accion" in df.columns:
@@ -880,7 +881,6 @@ def _combine_decisions(
         return df
 
     def _pad_or_trim(lst, fill):
-        """Garantiza len(lst)==n_rows para asignación segura a df[col]."""
         if len(lst) == n_rows:
             return lst
         if len(lst) == 0:
@@ -893,7 +893,6 @@ def _combine_decisions(
         return lst[:n_rows]
 
     def _safe_bool_cell(v) -> bool:
-        """Parse robusto para booleanos leídos de Excel/CSV (evita bool('False')==True)."""
         if v is None:
             return False
         try:
@@ -915,6 +914,7 @@ def _combine_decisions(
     # Outputs acumulados
     accion_final_list: List[str] = []
     accion_macro_list: List[str] = []
+    macro_assignment_list: List[str] = []
     macro_selected_list: List[bool] = []
     convergencia_list: List[str] = []
 
@@ -942,12 +942,12 @@ def _combine_decisions(
     fire_sale_threshold_book_list: List[float] = []
 
     missing_viability_list: List[bool] = []
+    restruct_viable_list: List[bool] = []  # útil para hard-guardrails posteriores
 
     g = _get_guardrails(risk_posture)
     hurdle = _safe_float(getattr(cfg.CONFIG.regulacion, "hurdle_rate", 0.0))
     rp_l = (risk_posture or "balanceado").strip().lower()
 
-    # Loop por préstamo
     for _, r in df.iterrows():
         loan_id = str(r.get("loan_id", _get_loan_id_from_row(r)) or "")
         accion_micro = _normalize_action(r.get("Accion_micro", "")) or "MANTENER"
@@ -955,15 +955,17 @@ def _combine_decisions(
         macro_info = macro_actions.get(loan_id)
         macro_selected = bool(macro_info is not None)
 
-        # Macro action: neutral si no seleccionado (no inventamos NO_ASIGNADO)
+        # Macro assignment (solo si tocado)
         if not macro_selected:
-            macro_action = accion_micro
+            macro_assignment = "NO_ASIGNADO"
+            macro_action_used = accion_micro  # neutral para no inventar steering
             macro_rationale = (
                 f"Macro not applied (n_steps={n_steps}, top_k={top_k}) ⇒ "
                 f"macro_action defaults to micro action (no portfolio steering)."
             )
         else:
-            macro_action = _normalize_action(macro_info.get("macro_action", "")) or "MANTENER"
+            macro_assignment = _normalize_action(macro_info.get("macro_action", "")) or "MANTENER"
+            macro_action_used = macro_assignment
             macro_rationale = (
                 " || ".join(macro_info.get("rationales", []) or [])
                 or "Macro selected (no rationale text)."
@@ -1019,7 +1021,7 @@ def _combine_decisions(
         if not np.isnan(deva):
             restruct_feasible &= (deva >= float(g["MIN_DEVA_RESTRUCT"]))
         else:
-            restruct_feasible &= False
+            restruct_feasible &= False  # sin ΔEVA, no confirmamos uplift
 
         # RC10 missing viability (segment-aware)
         seg_hint = _safe_str(r.get("segmento_banco", r.get("segment_raw", r.get("segment", ""))), "").strip().lower()
@@ -1107,35 +1109,34 @@ def _combine_decisions(
         fire_sale = bool(fire_sale_triggered)
         price_to_ead = (price / ead) if (ead > 0 and not np.isnan(price)) else np.nan
 
-        # Arbitraje: macro wins salvo guardrails DUROS
+        # Arbitraje: micro-led + macro wins salvo guardrails DUROS
         accion_candidate = accion_micro
         proposed_action = accion_micro
 
         if macro_selected:
-            if accion_micro == macro_action:
+            if accion_micro == macro_action_used:
                 accion_candidate = accion_micro
             else:
-                accion_candidate = macro_action
-
+                accion_candidate = macro_action_used  # macro gana por defecto
             proposed_action = accion_candidate
 
-            # Guardrail DURO 1: prudencial/balanceado no vende si fire_sale
+            # Guardrail DURO 1: en prudencial/balanceado NO se vende en fire-sale
             if accion_candidate == "VENDER" and fire_sale and rp_l in ("prudencial", "balanceado"):
                 accion_candidate = accion_micro
                 if accion_micro == "VENDER":
                     accion_candidate = "REESTRUCTURAR" if restruct_feasible else "MANTENER"
 
-            # Guardrail DURO 2: no adoptar REESTRUCTURAR si no feasible
+            # Guardrail DURO 2: si propone REESTRUCTURAR pero NO es feasible, no lo adoptamos
             if accion_candidate == "REESTRUCTURAR" and not restruct_feasible:
                 accion_candidate = accion_micro
                 if accion_micro == "REESTRUCTURAR":
                     accion_candidate = "MANTENER"
 
-        # RC10: si propones reestructurar pero faltan inputs => mantener
+        # RC10: si propones REESTRUCTURAR pero faltan inputs, bloquea a MANTENER
         if accion_candidate == "REESTRUCTURAR" and missing_viability_inputs:
             accion_candidate = "MANTENER"
 
-        # Última línea prudencial/balanceado: si aún queda vender con fire_sale => degradar
+        # Si queda VENDER en prudencial/balanceado y fire_sale, degradar (última línea)
         blocked_sell_fire_sale = False
         if (accion_candidate == "VENDER") and (rp_l in ("prudencial", "balanceado")) and fire_sale:
             blocked_sell_fire_sale = True
@@ -1147,7 +1148,7 @@ def _combine_decisions(
             "restruct_feasible": restruct_feasible,
             "fire_sale": fire_sale,
             "micro_meets_hurdle": micro_meets_hurdle,
-            "sell_requested": (accion_micro == "VENDER") or (macro_action == "VENDER"),
+            "sell_requested": (accion_micro == "VENDER") or (macro_action_used == "VENDER"),
             "blocked_sell_fire_sale": blocked_sell_fire_sale,
             "missing_viability_inputs": bool(missing_viability_inputs),
             "proposed_action": proposed_action,
@@ -1157,10 +1158,10 @@ def _combine_decisions(
         if not macro_selected:
             convergencia = "MACRO_NOT_APPLIED"
         else:
-            if accion_micro == macro_action:
+            if accion_micro == macro_action_used:
                 convergencia = "AGREE_MICRO_MACRO"
             else:
-                convergencia = "MACRO_WINS" if accion_final == macro_action else "GUARDRAIL_OVERRIDE"
+                convergencia = "MACRO_WINS" if accion_final == macro_action_used else "GUARDRAIL_OVERRIDE"
 
         # Evidence micro (si viene vacío, lo construimos)
         exp_micro_raw = _safe_str(r.get("Explanation_micro", ""))
@@ -1183,22 +1184,24 @@ def _combine_decisions(
                 f"FireSale={fire_sale}, RestructFeasible={restruct_feasible}."
             )
 
+        # Reasoning auditable
         reason_code, rationale_cib, governance = _cib_rationale_row(
             r=r,
             risk_posture=risk_posture,
             accion_micro=accion_micro,
-            macro_action=macro_action,
+            macro_action=macro_action_used,
             accion_final=accion_final,
             macro_rationale=(macro_rationale if macro_selected else ""),
             flags=flags,
         )
 
         explanation_micro = f"Micro={accion_micro}. Evidence: {micro_detail}"
-        explanation_macro = f"Macro={macro_action}. Evidence: {macro_rationale}"
+        explanation_macro = f"Macro={macro_action_used}. Evidence: {macro_rationale}"
         explanation_final = f"{rationale_cib} | Governance={governance} | Convergencia={convergencia}"
 
-        # Append (SIEMPRE una vez por fila)
-        accion_macro_list.append(macro_action)
+        # Append
+        accion_macro_list.append(macro_action_used)
+        macro_assignment_list.append(macro_assignment)
         macro_selected_list.append(bool(macro_selected))
         convergencia_list.append(convergencia)
         accion_final_list.append(accion_final)
@@ -1229,15 +1232,17 @@ def _combine_decisions(
 
         price_ratio_book_list.append(float(ratio_book) if np.isfinite(ratio_book) else np.nan)
         missing_viability_list.append(bool(missing_viability_inputs))
+        restruct_viable_list.append(bool(restruct_feasible))
 
     # saneo final de longitudes
-    accion_macro_list = _pad_or_trim(accion_macro_list, "NO_ASIGNADO")
+    accion_macro_list = _pad_or_trim(accion_macro_list, "MANTENER")
+    macro_assignment_list = _pad_or_trim(macro_assignment_list, "NO_ASIGNADO")
     macro_selected_list = _pad_or_trim(macro_selected_list, False)
     convergencia_list = _pad_or_trim(convergencia_list, "MACRO_NOT_APPLIED")
     accion_final_list = _pad_or_trim(accion_final_list, "MANTENER")
 
     explanation_micro_list = _pad_or_trim(explanation_micro_list, "Micro=NA")
-    explanation_macro_list = _pad_or_trim(explanation_macro_list, "Macro=NO_ASIGNADO")
+    explanation_macro_list = _pad_or_trim(explanation_macro_list, "Macro=NA")
     explanation_final_list = _pad_or_trim(explanation_final_list, "Fallback")
 
     reason_code_list = _pad_or_trim(reason_code_list, "RC00_FALLBACK")
@@ -1259,23 +1264,16 @@ def _combine_decisions(
     fire_sale_triggered_list = _pad_or_trim(fire_sale_triggered_list, False)
     fire_sale_triggers_list = _pad_or_trim(fire_sale_triggers_list, "")
     missing_viability_list = _pad_or_trim(missing_viability_list, False)
+    restruct_viable_list = _pad_or_trim(restruct_viable_list, False)
 
     # Columnas finales
     df["Accion_macro"] = accion_macro_list
+    df["Macro_Assignment"] = macro_assignment_list  # <- lo que “asignó” macro, solo si tocó
     df["Macro_Selected"] = macro_selected_list
     df["Convergencia_Caso"] = convergencia_list
 
     df["Accion_final"] = accion_final_list
     df["Accion"] = df["Accion_final"]  # legacy
-
-    # IMPORTANTÍSIMO: mantener alias usados por KPI/reporting
-    if "decision_final" in df.columns:
-        df["decision_final"] = df["Accion_final"]
-    else:
-        df["decision_final"] = df["Accion_final"]
-
-    if "Decision_Final" in df.columns:
-        df["Decision_Final"] = df["Accion_final"]
 
     df["Explanation_micro"] = explanation_micro_list
     df["Explanation_macro"] = explanation_macro_list
@@ -1300,151 +1298,22 @@ def _combine_decisions(
     df["FireSale_Triggered"] = fire_sale_triggered_list
     df["FireSale_Triggers"] = fire_sale_triggers_list
     df["Missing_Viability_Inputs"] = missing_viability_list
+    df["restruct_viable"] = restruct_viable_list  # para hard guardrails y auditoría
 
     # Reorden visual (enforce_schema reordenará canónicas primero)
     preferred = [
-        "loan_id",
-        "segment",
-        "EAD",
-        "RW",
-        "Accion_micro",
-        "Accion_macro",
-        "Macro_Selected",
-        "Accion_final",
-        "decision_final",
-        "Convergencia_Caso",
-        "Reason_Code",
-        "Decision_Governance",
-        "Missing_Viability_Inputs",
-        "Rationale_CIB",
-        "Macro_Evidence",
-        "Fire_Sale",
-        "FireSale_Enabled",
-        "FireSale_Triggered",
-        "FireSale_Triggers",
-        "Price_to_EAD",
-        "fire_sale_threshold",
-        "Explanation_micro",
-        "Explanation_macro",
-        "Explanation_final",
+        "loan_id", "segment", "EAD", "RW",
+        "Accion_micro", "Accion_macro", "Macro_Assignment", "Macro_Selected",
+        "Accion_final", "Convergencia_Caso",
+        "Reason_Code", "Decision_Governance",
+        "Missing_Viability_Inputs", "restruct_viable",
+        "Rationale_CIB", "Macro_Evidence",
+        "Fire_Sale", "FireSale_Enabled", "FireSale_Triggered", "FireSale_Triggers",
+        "Price_to_EAD", "fire_sale_threshold",
+        "Explanation_micro", "Explanation_macro", "Explanation_final",
     ]
     cols = [c for c in preferred if c in df.columns] + [c for c in df.columns if c not in preferred]
     df = df[cols]
-
-    # ===========================================================
-    # HARD GUARDRAILS POST-PROCESADO (bank-ready, schema-stable)
-    # ===========================================================
-
-    # 1) Posture gate estricto (solo si Accion_final=REESTRUCTURAR)
-    try:
-        posture_key = str(risk_posture or "balanceado").lower().strip()
-        g2 = DEFAULT_GUARDRAILS.get(posture_key, DEFAULT_GUARDRAILS["balanceado"])
-        dscr_min_g = float(g2.get("DSCR_MIN", 1.10))
-        pti_max_g = float(g2.get("PTI_MAX", 0.40))
-
-        accion_u = df["Accion_final"].astype(str).str.upper()
-        rest_mask = accion_u.eq("REESTRUCTURAR")
-
-        pti_s = pd.to_numeric(df.get("PTI_post", np.nan), errors="coerce")
-        dscr_s = pd.to_numeric(df.get("DSCR_post", np.nan), errors="coerce")
-
-        has_dscr = rest_mask & dscr_s.notna()
-        has_pti = rest_mask & dscr_s.isna() & pti_s.notna()
-        no_gate = rest_mask & dscr_s.isna() & pti_s.isna()
-
-        bad_gate = (has_dscr & (dscr_s < dscr_min_g)) | (has_pti & (pti_s > pti_max_g)) | no_gate
-
-        if bad_gate.any():
-            df.loc[bad_gate, "Accion_final"] = "MANTENER"
-            df.loc[bad_gate, "Accion"] = "MANTENER"
-            df.loc[bad_gate, "decision_final"] = "MANTENER"
-            if "Decision_Final" in df.columns:
-                df.loc[bad_gate, "Decision_Final"] = "MANTENER"
-
-            if "Decision_Governance" in df.columns:
-                df.loc[bad_gate, "Decision_Governance"] = "HARD_GUARDRAIL_OVERRIDE_RESTRUCT_GATE"
-            else:
-                df["Decision_Governance"] = ""
-                df.loc[bad_gate, "Decision_Governance"] = "HARD_GUARDRAIL_OVERRIDE_RESTRUCT_GATE"
-
-            if "Reason_Code" in df.columns:
-                df.loc[bad_gate, "Reason_Code"] = "RC12_RESTRUCT_BLOCKED_STRICT_POSTURE_GATE"
-    except Exception as e:
-        logger.warning(f"⚠ Guardrail gate postura (DSCR/PTI) no aplicado: {e}")
-
-    # 2) Fire-sale hard guardrail (NUNCA SELL si Price_to_EAD < fire_sale_threshold, en TODAS las posturas)
-    try:
-        accion_u = df["Accion_final"].astype(str).str.upper()
-        sell_mask = accion_u.eq("VENDER")
-
-        pead = pd.to_numeric(df.get("Price_to_EAD", np.nan), errors="coerce")
-        thr = pd.to_numeric(df.get("fire_sale_threshold", np.nan), errors="coerce")
-
-        fs_mask = sell_mask & pead.notna() & thr.notna() & (pead < thr)
-
-        if fs_mask.any():
-            df.loc[fs_mask, "Sell_Blocked"] = True
-
-            if "Sell_Blocked_Reason" not in df.columns:
-                df["Sell_Blocked_Reason"] = pd.Series([""] * len(df), index=df.index, dtype="string")
-            else:
-                df["Sell_Blocked_Reason"] = df["Sell_Blocked_Reason"].astype("string").fillna("")
-
-            df.loc[fs_mask, "Sell_Blocked_Reason"] = "FIRE_SALE_PRICE_TO_EAD_LT_THRESHOLD"
-
-            if "Decision_Governance" not in df.columns:
-                df["Decision_Governance"] = ""
-            df.loc[fs_mask, "Decision_Governance"] = "HARD_GUARDRAIL_OVERRIDE_SELL"
-
-            if "Reason_Code" in df.columns:
-                df.loc[fs_mask, "Reason_Code"] = "RC02_SELL_BLOCKED_FIRE_SALE"
-            else:
-                df["Reason_Code"] = ""
-                df.loc[fs_mask, "Reason_Code"] = "RC02_SELL_BLOCKED_FIRE_SALE"
-
-            df.loc[fs_mask, "FireSale_Triggered"] = True
-            if "FireSale_Triggers" in df.columns:
-                def _append_trigger(x):
-                    x = "" if pd.isna(x) else str(x).strip()
-                    add = "Price_to_EAD<threshold"
-                    if not x:
-                        return add
-                    return x if add in x else (x + "; " + add)
-                df.loc[fs_mask, "FireSale_Triggers"] = df.loc[fs_mask, "FireSale_Triggers"].apply(_append_trigger)
-
-            # Fallback de acción: REESTRUCTURAR si viable y no faltan inputs; si no, MANTENER
-            if "Missing_Viability_Inputs" in df.columns:
-                mvi = df["Missing_Viability_Inputs"].fillna(True).astype(bool)
-            else:
-                mvi = pd.Series(True, index=df.index)
-
-            if "restruct_viable" in df.columns:
-                rv = df["restruct_viable"].fillna(False).astype(bool)
-                can_restruct = rv & (~mvi)
-            else:
-                # Fallback: usamos DSCR/PTI_post si existen
-                posture_key = str(risk_posture or "balanceado").lower().strip()
-                g2 = DEFAULT_GUARDRAILS.get(posture_key, DEFAULT_GUARDRAILS["balanceado"])
-                dscr_min_g = float(g2.get("DSCR_MIN", 1.10))
-                pti_max_g = float(g2.get("PTI_MAX", 0.40))
-
-                pti_s = pd.to_numeric(df.get("PTI_post", np.nan), errors="coerce")
-                dscr_s = pd.to_numeric(df.get("DSCR_post", np.nan), errors="coerce")
-
-                ok_dscr = dscr_s.notna() & (dscr_s >= dscr_min_g)
-                ok_pti = dscr_s.isna() & pti_s.notna() & (pti_s <= pti_max_g)
-                can_restruct = (ok_dscr | ok_pti) & (~mvi)
-
-            df.loc[fs_mask & can_restruct, "Accion_final"] = "REESTRUCTURAR"
-            df.loc[fs_mask & (~can_restruct), "Accion_final"] = "MANTENER"
-
-            df.loc[fs_mask, "Accion"] = df.loc[fs_mask, "Accion_final"]
-            df.loc[fs_mask, "decision_final"] = df.loc[fs_mask, "Accion_final"]
-            if "Decision_Final" in df.columns:
-                df.loc[fs_mask, "Decision_Final"] = df.loc[fs_mask, "Accion_final"]
-
-    except Exception as e:
-        logger.warning(f"⚠ Fire-sale post-guardrail no aplicado: {e}")
 
     # ===========================================================
     # Contrafactual vs Realizado (coherencia para summary)
@@ -1464,6 +1333,142 @@ def _combine_decisions(
     df["capital_release_cf"] = pd.to_numeric(df["capital_release_cf"], errors="coerce")
     df.loc[df["capital_release_cf"].isna(), "capital_release_cf"] = (rwa_pre * float(ratio_total))
 
+    # ===========================================================
+    # HARD GUARDRAILS (post-construction, pre-realized)
+    # ===========================================================
+    # Helpers locales: mantener columnas espejo coherentes
+    def _set_action_all(mask: pd.Series, action: str) -> None:
+        """Setea acción en todas las columnas 'espejo' que existan."""
+        for c in (
+            "Accion_final",
+            "decision_final",
+            "Decision_Final",
+            "Accion",
+            "accion_final",
+            "Action_Final",
+            "final_decision",
+        ):
+            if c in df.columns:
+                df.loc[mask, c] = action
+
+    def _ensure_str_col(col: str, default: str = "") -> None:
+        if col not in df.columns:
+            df[col] = default
+        df[col] = df[col].astype("string").fillna("")
+
+    def _ensure_bool_col(col: str, default: bool = False) -> None:
+        if col not in df.columns:
+            df[col] = default
+        # no hacemos astype(bool) porque con strings puede dar True para "False"
+        # lo dejamos tal cual si ya venía.
+
+    # Asegurar columnas base de trazabilidad
+    _ensure_str_col("Reason_Code", "")
+    _ensure_str_col("Decision_Governance", "")
+    _ensure_str_col("Sell_Blocked_Reason", "")
+    _ensure_bool_col("Sell_Blocked", False)
+    _ensure_bool_col("FireSale_Triggered", False)
+    _ensure_str_col("FireSale_Triggers", "")
+
+    # ===========================================================
+    # 1) SELL hard guardrail:
+    # nunca permitir SELL si Price_to_EAD < fire_sale_threshold (todas las posturas)
+    # ===========================================================
+    accion_u = df["Accion_final"].astype(str).str.upper().str.strip()
+    sell_mask = accion_u.eq("VENDER")
+
+    pead = pd.to_numeric(df.get("Price_to_EAD", df.get("price_to_ead", np.nan)), errors="coerce")
+    thr = pd.to_numeric(df.get("fire_sale_threshold", np.nan), errors="coerce")
+
+    # Si thr no existe / todo NaN, usar MIN_PRICE_TO_EAD por postura como fallback
+    if thr.isna().all():
+        posture_key = (risk_posture or "balanceado").lower().strip()
+        g2 = DEFAULT_GUARDRAILS.get(posture_key, DEFAULT_GUARDRAILS["balanceado"])
+        thr = pd.Series([float(g2.get("MIN_PRICE_TO_EAD", 0.10))] * len(df), index=df.index)
+    else:
+        posture_key = (risk_posture or "balanceado").lower().strip()
+        g2 = DEFAULT_GUARDRAILS.get(posture_key, DEFAULT_GUARDRAILS["balanceado"])
+        thr = thr.fillna(float(g2.get("MIN_PRICE_TO_EAD", 0.10)))
+
+    fs_mask = sell_mask & pead.notna() & thr.notna() & (pead < thr)
+
+    if fs_mask.any():
+        df.loc[fs_mask, "Sell_Blocked"] = True
+        df.loc[fs_mask, "Sell_Blocked_Reason"] = "FIRE_SALE_PRICE_TO_EAD_LT_THRESHOLD"
+
+        df.loc[fs_mask, "Decision_Governance"] = "HARD_GUARDRAIL_OVERRIDE_SELL"
+        df.loc[fs_mask, "Reason_Code"] = "RC02_SELL_BLOCKED_FIRE_SALE"
+
+        df.loc[fs_mask, "FireSale_Triggered"] = True
+
+        def _append_trigger(x):
+            x = "" if pd.isna(x) else str(x).strip()
+            add = "Price_to_EAD<threshold"
+            if not x:
+                return add
+            return x if add in x else (x + "; " + add)
+
+        df.loc[fs_mask, "FireSale_Triggers"] = df.loc[fs_mask, "FireSale_Triggers"].apply(_append_trigger)
+
+        # Fallback de acción: REESTRUCTURAR si es viable y no faltan inputs; si no, MANTENER
+        # IMPORTANT: df.get(..., False) puede devolver bool escalar; lo pasamos a Series alineada
+        rv = df["restruct_viable"].astype(bool) if "restruct_viable" in df.columns else pd.Series(False, index=df.index)
+        mvi = (
+            df["Missing_Viability_Inputs"].astype(bool)
+            if "Missing_Viability_Inputs" in df.columns
+            else pd.Series(True, index=df.index)
+        )
+
+        can_restruct = rv & (~mvi)
+
+        _set_action_all(fs_mask & can_restruct, "REESTRUCTURAR")
+        _set_action_all(fs_mask & (~can_restruct), "MANTENER")
+
+    # ===========================================================
+    # 2) RESTRUCT hard guardrail:
+    # gate estricto por postura (DSCR/PTI) + missing inputs
+    # ===========================================================
+    try:
+        posture_key = (risk_posture or "balanceado").lower().strip()
+        g2 = DEFAULT_GUARDRAILS.get(posture_key, DEFAULT_GUARDRAILS["balanceado"])
+        dscr_min_gate = float(g2.get("DSCR_MIN", 1.10))
+        pti_max_gate = float(g2.get("PTI_MAX", 0.40))
+
+        accion_u2 = df["Accion_final"].astype(str).str.upper().str.strip()
+        rest_mask = accion_u2.eq("REESTRUCTURAR")
+
+        pti_gate = pd.to_numeric(df.get("PTI_post", df.get("PTI", np.nan)), errors="coerce")
+        dscr_gate = pd.to_numeric(df.get("DSCR_post", df.get("DSCR", np.nan)), errors="coerce")
+
+        miss_viab = (
+            df["Missing_Viability_Inputs"].astype(bool)
+            if "Missing_Viability_Inputs" in df.columns
+            else pd.Series(False, index=df.index)
+        )
+
+        has_dscr = rest_mask & dscr_gate.notna()
+        has_pti = rest_mask & dscr_gate.isna() & pti_gate.notna()
+        no_gate = rest_mask & dscr_gate.isna() & pti_gate.isna()
+
+        bad_gate = (
+            (has_dscr & (dscr_gate < dscr_min_gate))
+            | (has_pti & (pti_gate > pti_max_gate))
+            | no_gate
+            | (rest_mask & miss_viab)
+        )
+
+        if bad_gate.any():
+            _set_action_all(bad_gate, "MANTENER")
+            df.loc[bad_gate, "Decision_Governance"] = "HARD_GUARDRAIL_OVERRIDE_RESTRUCT_GATE"
+            df.loc[bad_gate, "Reason_Code"] = "RC12_RESTRUCT_BLOCKED_STRICT_POSTURE_GATE"
+
+    except Exception as e:
+        logger.warning(f"⚠ Guardrail gate postura (DSCR/PTI) no aplicado: {e}")
+
+
+    # ===========================================================
+    # Realizados (con Accion_final ya hard-guardrailed)
+    # ===========================================================
     df["pnl_realized"] = 0.0
     df["capital_release_realized"] = 0.0
 
@@ -1473,6 +1478,8 @@ def _combine_decisions(
 
     if "pnl" in df.columns:
         df.loc[sell_mask2, "pnl_realized"] = pd.to_numeric(df.loc[sell_mask2, "pnl"], errors="coerce").fillna(0.0)
+    elif "PnL" in df.columns:
+        df.loc[sell_mask2, "pnl_realized"] = pd.to_numeric(df.loc[sell_mask2, "PnL"], errors="coerce").fillna(0.0)
 
     df.loc[sell_mask2, "capital_release_realized"] = pd.to_numeric(
         df.loc[sell_mask2, "capital_release_cf"], errors="coerce"
@@ -1520,6 +1527,7 @@ def run_coordinator_inference(
     if model_macro is None:
         model_macro = _pick_default_macro_model()
 
+    # 0) Portfolio merge defensivo
     df_port = _load_portfolio_df(portfolio_path)
 
     # 1) MICRO
@@ -1587,7 +1595,7 @@ def run_coordinator_inference(
         df_final.to_csv(csv_final, index=False, encoding="utf-8-sig")
         logger.info(f"🧾 Audit CSV: {csv_final}")
 
-    # Logging de convergencia (rápido)
+    # Logging convergencia
     try:
         n = len(df_final)
         sel = int(pd.Series(df_final.get("Macro_Selected", False)).sum())
@@ -1624,7 +1632,7 @@ def run_coordinator_inference_multi_posture(cfg_base: CoordinatorInferenceConfig
     logger.info(f"  • deliverable_only:    {cfg_base.deliverable_only}")
     logger.info(f"  • export_audit_csv:    {cfg_base.export_audit_csv}")
 
-    import glob  # local import (simple y robusto)
+    import glob
 
     for posture in postures:
         logger.info(f"▶ Ejecutando COORDINATOR (risk_posture={posture})…")
@@ -1658,7 +1666,7 @@ def run_coordinator_inference_multi_posture(cfg_base: CoordinatorInferenceConfig
 
         outputs.append(out_dir)
 
-        # --- Copia Excel al DELIVERABLE ---
+        # Copia Excel al DELIVERABLE
         dest_excel = os.path.join(deliverable_dir, f"decisiones_finales_{posture}.xlsx")
         if excel_path and os.path.exists(excel_path):
             shutil.copy2(excel_path, dest_excel)
@@ -1666,7 +1674,7 @@ def run_coordinator_inference_multi_posture(cfg_base: CoordinatorInferenceConfig
         else:
             logger.warning(f"  ⚠ No se encontró excel_path para postura={posture}: {excel_path}")
 
-        # --- Copia AUDIT CSV al DELIVERABLE (bank-ready) ---
+        # Copia AUDIT CSV al DELIVERABLE
         if bool(cfg_base.export_audit_csv):
             if out_dir and os.path.exists(out_dir):
                 preferred = glob.glob(os.path.join(out_dir, "**", f"decisiones_audit_{posture}.csv"), recursive=True)
@@ -1753,12 +1761,8 @@ def parse_args():
     p.add_argument("--deterministic", dest="deterministic", action="store_true", default=True)
     p.add_argument("--non-deterministic", dest="deterministic", action="store_false")
 
-    p.add_argument(
-        "--keep-all",
-        action="store_true",
-        default=False,
-        help="Si se activa, devuelve también carpetas intermedias (no solo DELIVERABLE).",
-    )
+    p.add_argument("--keep-all", action="store_true", default=False,
+                   help="Si se activa, devuelve también carpetas intermedias (no solo DELIVERABLE).")
     p.add_argument("--export-audit-csv", action="store_true", default=False)
 
     return p.parse_args()
