@@ -1403,6 +1403,53 @@ def _combine_decisions(
     accion_final_u = df["Accion_final"].astype(str).str.upper()
 
     sell_mask = accion_final_u.eq("VENDER")
+        # HARD GUARDRAIL (bank-ready):
+    # Nunca permitir SELL/VENDER si Price_to_EAD < fire_sale_threshold (en TODAS las posturas, incluida desinversión).
+    pead = pd.to_numeric(df["Price_to_EAD"], errors="coerce")
+    thr  = pd.to_numeric(df["fire_sale_threshold"], errors="coerce")
+    fs_mask = sell_mask & (pead < thr)
+
+    if fs_mask.any():
+        # Flags y trazabilidad
+        df.loc[fs_mask, "Sell_Blocked"] = True
+        # Asegura dtype string/object para evitar FutureWarning (y futuras roturas)
+        if "Sell_Blocked_Reason" not in df.columns:
+            df["Sell_Blocked_Reason"] = ""
+        else:
+            df["Sell_Blocked_Reason"] = df["Sell_Blocked_Reason"].astype("object")
+
+        df.loc[fs_mask, "Sell_Blocked_Reason"] = "FIRE_SALE_PRICE_TO_EAD_LT_THRESHOLD"
+        df.loc[fs_mask, "Decision_Governance"] = "HARD_GUARDRAIL_OVERRIDE_SELL"
+        if "Reason_Code" in df.columns:
+            df.loc[fs_mask, "Reason_Code"] = "RC02_SELL_BLOCKED_FIRE_SALE"
+
+        df.loc[fs_mask, "FireSale_Triggered"] = True
+        if "FireSale_Triggers" in df.columns:
+            def _append_trigger(x):
+                x = "" if pd.isna(x) else str(x).strip()
+                add = "Price_to_EAD<threshold"
+                if not x:
+                    return add
+                return x if add in x else (x + "; " + add)
+            df.loc[fs_mask, "FireSale_Triggers"] = df.loc[fs_mask, "FireSale_Triggers"].apply(_append_trigger)
+
+        # Fallback de acción: REESTRUCTURAR si es viable y no faltan inputs; si no, MANTENER
+        if ("restruct_viable" in df.columns) and ("Missing_Viability_Inputs" in df.columns):
+            can_restruct = df["restruct_viable"].astype(bool) & (~df["Missing_Viability_Inputs"].astype(bool))
+        elif "restruct_viable" in df.columns:
+            can_restruct = df["restruct_viable"].astype(bool)
+        else:
+            can_restruct = False
+
+        df.loc[fs_mask & can_restruct, "Accion_final"] = "REESTRUCTURAR"
+        df.loc[fs_mask & (~can_restruct), "Accion_final"] = "MANTENER"
+
+        # Mantener columnas espejo coherentes
+        if "Accion" in df.columns:
+            df.loc[fs_mask, "Accion"] = df.loc[fs_mask, "Accion_final"]
+        if "decision_final" in df.columns:
+            df.loc[fs_mask, "decision_final"] = df.loc[fs_mask, "Accion_final"]
+
     if "pnl" in df.columns:
         df.loc[sell_mask, "pnl_realized"] = pd.to_numeric(df.loc[sell_mask, "pnl"], errors="coerce").fillna(0.0)
 
@@ -2010,6 +2057,8 @@ def run_coordinator_inference_multi_posture(cfg_base: CoordinatorInferenceConfig
     logger.info(f"  • deliverable_only:    {cfg_base.deliverable_only}")
     logger.info(f"  • export_audit_csv:    {cfg_base.export_audit_csv}")
 
+    import glob  # local import (simple y robusto)
+
     for posture in postures:
         logger.info(f"▶ Ejecutando COORDINATOR (risk_posture={posture})…")
 
@@ -2034,8 +2083,8 @@ def run_coordinator_inference_multi_posture(cfg_base: CoordinatorInferenceConfig
             seed=int(cfg_base.seed),
             deterministic=bool(cfg_base.deterministic),
 
-            # audit solo si keep-all (deliverable_only=False)
-            export_audit_csv=bool(cfg_base.export_audit_csv and (not cfg_base.deliverable_only)),
+            # ✅ Audit debe poder generarse aunque deliverable_only=True (bank-ready)
+            export_audit_csv=bool(cfg_base.export_audit_csv),
 
             vecnorm_macro_path=cfg_base.vecnormalize_path_macro,
             vecnorm_loan_path=cfg_base.vecnormalize_path_loan,
@@ -2043,6 +2092,7 @@ def run_coordinator_inference_multi_posture(cfg_base: CoordinatorInferenceConfig
 
         outputs.append(out_dir)
 
+        # --- Copia Excel al DELIVERABLE ---
         dest_excel = os.path.join(deliverable_dir, f"decisiones_finales_{posture}.xlsx")
         if excel_path and os.path.exists(excel_path):
             shutil.copy2(excel_path, dest_excel)
@@ -2050,8 +2100,26 @@ def run_coordinator_inference_multi_posture(cfg_base: CoordinatorInferenceConfig
         else:
             logger.warning(f"  ⚠ No se encontró excel_path para postura={posture}: {excel_path}")
 
+        # --- Copia AUDIT CSV al DELIVERABLE (bank-ready) ---
+        if bool(cfg_base.export_audit_csv):
+            if out_dir and os.path.exists(out_dir):
+                # Preferimos el audit CSV de la postura si existe; si no, cogemos el primero que aparezca.
+                preferred = glob.glob(os.path.join(out_dir, "**", f"decisiones_audit_{posture}.csv"), recursive=True)
+                candidates = preferred or glob.glob(os.path.join(out_dir, "**", "decisiones_audit_*.csv"), recursive=True)
+
+                if candidates:
+                    src_audit = candidates[0]
+                    dest_audit = os.path.join(deliverable_dir, f"decisiones_audit_{posture}.csv")
+                    shutil.copy2(src_audit, dest_audit)
+                    logger.info(f"  ✓ Audit CSV ({posture}) => {dest_audit}")
+                else:
+                    logger.warning(f"  ⚠ No se encontró audit CSV en out_dir para postura={posture}: {out_dir}")
+            else:
+                logger.warning(f"  ⚠ out_dir inválido para postura={posture}: {out_dir}")
+
     logger.info("✅ DELIVERABLE generado (3 Excels).")
 
+    # Limpieza: elimina el MULTI (intermedios) si deliverable_only=True
     if cfg_base.deliverable_only:
         try:
             shutil.rmtree(run_base_dir, ignore_errors=True)
@@ -2061,6 +2129,7 @@ def run_coordinator_inference_multi_posture(cfg_base: CoordinatorInferenceConfig
         return [deliverable_dir]
 
     return outputs + [deliverable_dir]
+
 
 
 # ===========================================================
@@ -2079,6 +2148,9 @@ def parse_args():
         dest="vn_micro",
         help="Ruta VecNormalize MICRO (LoanEnv). Recomendado: models/vecnormalize_loan.pkl",
     )
+    p.add_argument("--vecnorm", type=str, default=None, dest="vecnorm",
+                   help="(DEPRECATED) Alias legacy de --vn-micro (para compatibilidad con .bat antiguos).")
+
 
     p.add_argument("--model-macro", type=str, default=_pick_default_macro_model(), dest="model_macro",
                    help="Ruta a best_model_portfolio.zip (PortfolioEnv).")
@@ -2108,6 +2180,10 @@ def parse_args():
 
 def main():
     args = parse_args()
+        # Backward compatibility: --vecnorm (legacy) -> --vn-micro (nuevo)
+    if (not getattr(args, "vn_micro", None)) and getattr(args, "vecnorm", None):
+        args.vn_micro = args.vecnorm
+
     deliverable_only = (not bool(args.keep_all))
 
     if getattr(args, "all_postures", False):
