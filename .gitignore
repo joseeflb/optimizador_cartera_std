@@ -21,3 +21,17 @@ _tmp/backup/
 # Reports/outputs generados (cualquier nivel dentro de reports/)
 reports/**/*.txt
 reports/**/*.xlsx
+# Python
+__pycache__/
+*.py[cod]
+
+# Logs runtime
+logs/*.log
+
+# Generated runs / inference outputs
+reports/inference_*/
+reports/inference_portfolio_*/
+reports/runs/
+
+# Temp
+_tmp/
