@@ -1274,6 +1274,13 @@ def _combine_decisions(
 
     df["Accion_final"] = accion_final_list
     df["Accion"] = df["Accion_final"]  # legacy
+    # ---- Canonical mirror (audit/KPIs): decision_final SIEMPRE = Accion_final
+    df["decision_final"] = df["Accion_final"]
+
+    # Si existen aliases legacy, mantenlos coherentes (no creamos columnas nuevas salvo decision_final)
+    for c in ("Decision_Final", "Final_Decision", "accion_final", "Accion_Final", "Decision"):
+        if c in df.columns:
+            df[c] = df["Accion_final"]
 
     df["Explanation_micro"] = explanation_micro_list
     df["Explanation_macro"] = explanation_macro_list
@@ -1336,115 +1343,112 @@ def _combine_decisions(
     # ===========================================================
     # HARD GUARDRAILS (post-construction, pre-realized)
     # ===========================================================
-    # Helpers locales: mantener columnas espejo coherentes
-    def _set_action_all(mask: pd.Series, action: str) -> None:
-        """Setea acción en todas las columnas 'espejo' que existan."""
-        for c in (
-            "Accion_final",
-            "decision_final",
-            "Decision_Final",
-            "Accion",
-            "accion_final",
-            "Action_Final",
-            "final_decision",
-        ):
-            if c in df.columns:
-                df.loc[mask, c] = action
 
     def _ensure_str_col(col: str, default: str = "") -> None:
+        """Asegura columna string estable (evita FutureWarning y NaNs raros)."""
         if col not in df.columns:
             df[col] = default
-        df[col] = df[col].astype("string").fillna("")
+        # Usamos dtype "string" (pandas) para estabilidad
+        df[col] = df[col].astype("string").fillna(default)
 
-    def _ensure_bool_col(col: str, default: bool = False) -> None:
-        if col not in df.columns:
-            df[col] = default
-        # no hacemos astype(bool) porque con strings puede dar True para "False"
-        # lo dejamos tal cual si ya venía.
+    def _set_action_all(mask: pd.Series, action: str) -> None:
+        """Set de acción en TODAS las columnas espejo que puedan existir."""
+        a = _normalize_action(action) or str(action).upper().strip()
+        mirror_cols = (
+            "Accion_final",
+            "Accion",
+            "decision_final",
+            "Decision_Final",
+            "Final_Decision",
+            "accion_final",
+            "Accion_Final",
+            "Decision",
+        )
+        for c in mirror_cols:
+            if c in df.columns:
+                df.loc[mask, c] = a
 
-    # Asegurar columnas base de trazabilidad
-    _ensure_str_col("Reason_Code", "")
-    _ensure_str_col("Decision_Governance", "")
-    _ensure_str_col("Sell_Blocked_Reason", "")
-    _ensure_bool_col("Sell_Blocked", False)
-    _ensure_bool_col("FireSale_Triggered", False)
-    _ensure_str_col("FireSale_Triggers", "")
-
-    # ===========================================================
+    # -----------------------------------------------------------
     # 1) SELL hard guardrail:
     # nunca permitir SELL si Price_to_EAD < fire_sale_threshold (todas las posturas)
-    # ===========================================================
-    accion_u = df["Accion_final"].astype(str).str.upper().str.strip()
-    sell_mask = accion_u.eq("VENDER")
+    # -----------------------------------------------------------
+    accion_base = (
+        df.get("Accion_final", df.get("decision_final", ""))
+        .astype(str)
+        .str.upper()
+        .str.strip()
+    )
+    sell_mask = accion_base.eq("VENDER")
 
-    pead = pd.to_numeric(df.get("Price_to_EAD", df.get("price_to_ead", np.nan)), errors="coerce")
+    pead = pd.to_numeric(df.get("Price_to_EAD", np.nan), errors="coerce")
     thr = pd.to_numeric(df.get("fire_sale_threshold", np.nan), errors="coerce")
-
-    # Si thr no existe / todo NaN, usar MIN_PRICE_TO_EAD por postura como fallback
-    if thr.isna().all():
-        posture_key = (risk_posture or "balanceado").lower().strip()
-        g2 = DEFAULT_GUARDRAILS.get(posture_key, DEFAULT_GUARDRAILS["balanceado"])
-        thr = pd.Series([float(g2.get("MIN_PRICE_TO_EAD", 0.10))] * len(df), index=df.index)
-    else:
-        posture_key = (risk_posture or "balanceado").lower().strip()
-        g2 = DEFAULT_GUARDRAILS.get(posture_key, DEFAULT_GUARDRAILS["balanceado"])
-        thr = thr.fillna(float(g2.get("MIN_PRICE_TO_EAD", 0.10)))
 
     fs_mask = sell_mask & pead.notna() & thr.notna() & (pead < thr)
 
     if fs_mask.any():
         df.loc[fs_mask, "Sell_Blocked"] = True
+        _ensure_str_col("Sell_Blocked_Reason", "")
         df.loc[fs_mask, "Sell_Blocked_Reason"] = "FIRE_SALE_PRICE_TO_EAD_LT_THRESHOLD"
 
-        df.loc[fs_mask, "Decision_Governance"] = "HARD_GUARDRAIL_OVERRIDE_SELL"
-        df.loc[fs_mask, "Reason_Code"] = "RC02_SELL_BLOCKED_FIRE_SALE"
+        if "Decision_Governance" in df.columns:
+            df.loc[fs_mask, "Decision_Governance"] = "HARD_GUARDRAIL_OVERRIDE_SELL"
+        if "Reason_Code" in df.columns:
+            df.loc[fs_mask, "Reason_Code"] = "RC02_SELL_BLOCKED_FIRE_SALE"
 
-        df.loc[fs_mask, "FireSale_Triggered"] = True
+        # flags fire-sale
+        if "FireSale_Triggered" in df.columns:
+            df.loc[fs_mask, "FireSale_Triggered"] = True
+        if "FireSale_Triggers" in df.columns:
+            def _append_trigger(x):
+                x = "" if pd.isna(x) else str(x).strip()
+                add = "Price_to_EAD<threshold"
+                if not x:
+                    return add
+                return x if add in x else (x + "; " + add)
 
-        def _append_trigger(x):
-            x = "" if pd.isna(x) else str(x).strip()
-            add = "Price_to_EAD<threshold"
-            if not x:
-                return add
-            return x if add in x else (x + "; " + add)
+            df.loc[fs_mask, "FireSale_Triggers"] = df.loc[fs_mask, "FireSale_Triggers"].apply(_append_trigger)
 
-        df.loc[fs_mask, "FireSale_Triggers"] = df.loc[fs_mask, "FireSale_Triggers"].apply(_append_trigger)
+        # Fallback de acción: REESTRUCTURAR si viable y sin missing inputs; si no, MANTENER
+        if "restruct_viable" in df.columns:
+            rv = df["restruct_viable"].apply(_safe_bool_cell)
+        else:
+            rv = pd.Series(False, index=df.index)
 
-        # Fallback de acción: REESTRUCTURAR si es viable y no faltan inputs; si no, MANTENER
-        # IMPORTANT: df.get(..., False) puede devolver bool escalar; lo pasamos a Series alineada
-        rv = df["restruct_viable"].astype(bool) if "restruct_viable" in df.columns else pd.Series(False, index=df.index)
-        mvi = (
-            df["Missing_Viability_Inputs"].astype(bool)
-            if "Missing_Viability_Inputs" in df.columns
-            else pd.Series(True, index=df.index)
-        )
+        if "Missing_Viability_Inputs" in df.columns:
+            mvi = df["Missing_Viability_Inputs"].apply(_safe_bool_cell)
+        else:
+            mvi = pd.Series(False, index=df.index)
 
         can_restruct = rv & (~mvi)
 
         _set_action_all(fs_mask & can_restruct, "REESTRUCTURAR")
         _set_action_all(fs_mask & (~can_restruct), "MANTENER")
 
-    # ===========================================================
+    # -----------------------------------------------------------
     # 2) RESTRUCT hard guardrail:
     # gate estricto por postura (DSCR/PTI) + missing inputs
-    # ===========================================================
+    # -----------------------------------------------------------
     try:
         posture_key = (risk_posture or "balanceado").lower().strip()
         g2 = DEFAULT_GUARDRAILS.get(posture_key, DEFAULT_GUARDRAILS["balanceado"])
         dscr_min_gate = float(g2.get("DSCR_MIN", 1.10))
         pti_max_gate = float(g2.get("PTI_MAX", 0.40))
 
-        accion_u2 = df["Accion_final"].astype(str).str.upper().str.strip()
-        rest_mask = accion_u2.eq("REESTRUCTURAR")
+        accion2 = (
+            df.get("Accion_final", df.get("decision_final", ""))
+            .astype(str)
+            .str.upper()
+            .str.strip()
+        )
+        rest_mask = accion2.eq("REESTRUCTURAR")
 
         pti_gate = pd.to_numeric(df.get("PTI_post", df.get("PTI", np.nan)), errors="coerce")
         dscr_gate = pd.to_numeric(df.get("DSCR_post", df.get("DSCR", np.nan)), errors="coerce")
 
-        miss_viab = (
-            df["Missing_Viability_Inputs"].astype(bool)
-            if "Missing_Viability_Inputs" in df.columns
-            else pd.Series(False, index=df.index)
-        )
+        if "Missing_Viability_Inputs" in df.columns:
+            miss_viab = df["Missing_Viability_Inputs"].apply(_safe_bool_cell)
+        else:
+            miss_viab = pd.Series(False, index=df.index)
 
         has_dscr = rest_mask & dscr_gate.notna()
         has_pti = rest_mask & dscr_gate.isna() & pti_gate.notna()
@@ -1459,11 +1463,125 @@ def _combine_decisions(
 
         if bad_gate.any():
             _set_action_all(bad_gate, "MANTENER")
-            df.loc[bad_gate, "Decision_Governance"] = "HARD_GUARDRAIL_OVERRIDE_RESTRUCT_GATE"
-            df.loc[bad_gate, "Reason_Code"] = "RC12_RESTRUCT_BLOCKED_STRICT_POSTURE_GATE"
+            if "Decision_Governance" in df.columns:
+                df.loc[bad_gate, "Decision_Governance"] = "HARD_GUARDRAIL_OVERRIDE_RESTRUCT_GATE"
+            if "Reason_Code" in df.columns:
+                df.loc[bad_gate, "Reason_Code"] = "RC12_RESTRUCT_BLOCKED_STRICT_POSTURE_GATE"
 
     except Exception as e:
         logger.warning(f"⚠ Guardrail gate postura (DSCR/PTI) no aplicado: {e}")
+
+    # IMPORTANTÍSIMO:
+    # A partir de aquí, para realized/summary, RE-CALCULA masks con la acción final ya corregida.
+
+    # ===========================================================
+    # CONSISTENCY SWEEP (RC02/RC12 must match final action)
+    # ===========================================================
+    accion_end = df.get("Accion_final", df.get("decision_final", "")).astype(str).str.upper().str.strip()
+
+    # ---- RC02 must never end up as VENDER
+    rc02_mask = df.get("Reason_Code", "").astype(str).eq("RC02_SELL_BLOCKED_FIRE_SALE")
+    bad_rc02 = rc02_mask & accion_end.eq("VENDER")
+
+    if bad_rc02.any():
+        logger.warning(
+            f"⚠ RC02 inconsistente: {int(bad_rc02.sum())} filas con Reason_Code=RC02 pero Accion_final=VENDER. "
+            "Forzando acción fuera de SELL."
+        )
+
+        if "restruct_viable" in df.columns:
+            rv = df["restruct_viable"].apply(_safe_bool_cell)
+        else:
+            rv = pd.Series(False, index=df.index)
+
+        if "Missing_Viability_Inputs" in df.columns:
+            mvi = df["Missing_Viability_Inputs"].apply(_safe_bool_cell)
+        else:
+            mvi = pd.Series(False, index=df.index)
+
+        can_restruct = rv & (~mvi)
+
+        df.loc[bad_rc02, "Sell_Blocked"] = True
+        _ensure_str_col("Sell_Blocked_Reason", "")
+        df.loc[bad_rc02, "Sell_Blocked_Reason"] = "FIRE_SALE_PRICE_TO_EAD_LT_THRESHOLD"
+
+        if "Decision_Governance" in df.columns:
+            df.loc[bad_rc02, "Decision_Governance"] = "HARD_GUARDRAIL_OVERRIDE_SELL"
+        if "FireSale_Triggered" in df.columns:
+            df.loc[bad_rc02, "FireSale_Triggered"] = True
+
+        _set_action_all(bad_rc02 & can_restruct, "REESTRUCTURAR")
+        _set_action_all(bad_rc02 & (~can_restruct), "MANTENER")
+
+        accion_end = df.get("Accion_final", df.get("decision_final", "")).astype(str).str.upper().str.strip()
+    # ---- RC02 must always imply Sell_Blocked + FireSale_Triggered
+    rc02_mask = df.get("Reason_Code", "").astype(str).eq("RC02_SELL_BLOCKED_FIRE_SALE")
+    if rc02_mask.any():
+
+        # 1) Sell_Blocked (crear si no existe)
+        if "Sell_Blocked" not in df.columns:
+            df["Sell_Blocked"] = False
+        df.loc[rc02_mask, "Sell_Blocked"] = True
+
+        # 2) Sell_Blocked_Reason (no puede quedar vacío/NaN/"nan"/"<NA>")
+        _ensure_str_col("Sell_Blocked_Reason", "")
+        cur_reason = df["Sell_Blocked_Reason"].astype("string").fillna("").str.strip()
+        is_missing_reason = cur_reason.eq("") | cur_reason.str.lower().isin({"nan", "<na>", "none"})
+
+        if "FireSale_Triggers" in df.columns:
+            trig = df["FireSale_Triggers"].astype("string").fillna("")
+            trig_u = trig.str.upper()
+
+            price_trig = trig_u.str.contains("PRICE_TO_EAD<THRESHOLD", na=False)
+            pnl_trig = trig_u.str.contains("PNL_", na=False)  # captura PNL_BOOK_RATIO / PNL_ABS etc.
+
+            reason_series = pd.Series("FIRE_SALE_POLICY_TRIGGERED", index=df.index)
+            reason_series.loc[pnl_trig] = "FIRE_SALE_PNL_POLICY_TRIGGERED"
+            reason_series.loc[price_trig] = "FIRE_SALE_PRICE_TO_EAD_LT_THRESHOLD"
+
+            df.loc[rc02_mask & is_missing_reason, "Sell_Blocked_Reason"] = reason_series.loc[rc02_mask & is_missing_reason]
+        else:
+            df.loc[rc02_mask & is_missing_reason, "Sell_Blocked_Reason"] = "FIRE_SALE_POLICY_TRIGGERED"
+
+        # 3) Decision_Governance: NO pisar si ya trae algo; si trae, añadir tag (append)
+        if "Decision_Governance" in df.columns:
+            _ensure_str_col("Decision_Governance", "")
+            cur_gov = df["Decision_Governance"].astype("string").fillna("").str.strip()
+            gov_missing = cur_gov.eq("") | cur_gov.str.lower().isin({"nan", "<na>", "none"})
+
+            tag = "HARD_GUARDRAIL_OVERRIDE_SELL"
+
+            # si está vacío → set
+            df.loc[rc02_mask & gov_missing, "Decision_Governance"] = tag
+
+            # si ya hay texto y no contiene el tag → append
+            need_append = rc02_mask & (~gov_missing) & (~cur_gov.str.contains(tag, case=False, na=False))
+            df.loc[need_append, "Decision_Governance"] = cur_gov.loc[need_append] + "; " + tag
+
+        # 4) FireSale_Triggered coherente con RC02 (crear si no existe)
+        if "FireSale_Triggered" not in df.columns:
+            df["FireSale_Triggered"] = False
+        df.loc[rc02_mask, "FireSale_Triggered"] = True
+
+
+    # ---- RC12 must never end up as REESTRUCTURAR
+    rc12_mask = df.get("Reason_Code", "").astype(str).eq("RC12_RESTRUCT_BLOCKED_STRICT_POSTURE_GATE")
+    bad_rc12 = rc12_mask & accion_end.eq("REESTRUCTURAR")
+
+    if bad_rc12.any():
+        logger.warning(
+            f"⚠ RC12 inconsistente: {int(bad_rc12.sum())} filas con Reason_Code=RC12 pero Accion_final=REESTRUCTURAR. "
+            "Forzando MANTENER."
+        )
+        _set_action_all(bad_rc12, "MANTENER")
+        if "Decision_Governance" in df.columns:
+            df.loc[bad_rc12, "Decision_Governance"] = "HARD_GUARDRAIL_OVERRIDE_RESTRUCT_GATE"
+
+    # Recalcular masks finales tras guardrails + consistency sweep
+    accion_final_u = df.get("Accion_final", df.get("decision_final", "")).astype(str).str.upper().str.strip()
+    sell_mask = accion_final_u.eq("VENDER")
+    rest_mask = accion_final_u.eq("REESTRUCTURAR")
+
 
 
     # ===========================================================

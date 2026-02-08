@@ -35,3 +35,6 @@ reports/runs/
 
 # Temp
 _tmp/
+# --- generated local data (do not commit)
+data/processed/
+data/portfolio_synth.xlsx
