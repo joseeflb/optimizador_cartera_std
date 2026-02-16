@@ -1,0 +1,26 @@
+{
+  "version": "1.0",
+  "generated_at": "2026-02-16T00:12:15.148416Z",
+  "tag": "PC7_SECOND_PASS",
+  "risk_posture": "desinversion",
+  "files": {
+    "canonical_csv": {
+      "path": "decisiones_des_canonical.csv",
+      "sha256": "3b64ec0c12a8ad5e92f760e35c1f058e1065d862b1f96d0aac96ee473e92e24d",
+      "size_bytes": 172270,
+      "format": "CSV UTF-8 (Unix line endings)",
+      "float_format": "%.6f",
+      "order": "loan_id ASC"
+    },
+    "source_xlsx": {
+      "path": "decisiones_finales_desinversion.xlsx",
+      "sha256": "f31f1a16555eb7c7be5bdc80311454923fdeb77ed7942c000103d6f093497403",
+      "size_bytes": 412061,
+      "warning": "XLSX hash puede variar por metadata Excel; usar CSV como referencia canónica"
+    }
+  },
+  "verification": {
+    "command": "python _tmp/verify_manifest.py --csv decisiones_des_canonical.csv --manifest MANIFEST_des.json",
+    "expected_csv_hash": "3b64ec0c12a8ad5e92f760e35c1f058e1065d862b1f96d0aac96ee473e92e24d"
+  }
+}

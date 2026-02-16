@@ -1,40 +1,66 @@
-﻿# Python bytecode
+﻿# =========================
+# Python caches / bytecode
+# =========================
 __pycache__/
 **/__pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
 
+# =========================
+# Virtualenvs
+# =========================
+.venv/
+venv/
+
+# =========================
 # Logs
-logs/*.log
-*.log
-# Logs / runs / artifacts
+# =========================
 logs/
-reports/runs/
-reports/summary/charts/
 *.log
-# Backups locales
+
+# =========================
+# Local backups / temp
+# =========================
 *.bak
 *.bak2
 *.bak3
+
+# Ignora todo _tmp por defecto, PERO deja versionar scripts/markdown útiles
+_tmp/*
+!_tmp/**/*.py
+!_tmp/**/*.md
 _tmp/backup/
-# Reports/outputs generados (cualquier nivel dentro de reports/)
-reports/**/*.txt
-reports/**/*.xlsx
-# Python
-__pycache__/
-*.py[cod]
 
-# Logs runtime
-logs/*.log
-
-# Generated runs / inference outputs
+# =========================
+# Generated runs / heavy outputs (NO versionar)
+# =========================
+reports/BANK_READY_DELIVERABLE_FINAL_run*/
+reports/runs/
 reports/inference_*/
 reports/inference_portfolio_*/
-reports/runs/
+reports/coordinated_inference_*/
+reports/summary/charts/
 
-# Temp
-_tmp/
-# --- generated local data (do not commit)
+# Report outputs pesados por defecto
+reports/**/*.xlsx
+reports/**/*.txt
+
+# =========================
+# Local generated data (NO versionar)
+# =========================
 data/processed/
-data/portfolio_synth.xlsx
+data/*.xlsx
+
+# =========================
+# EXCEPCIONES (sí versionar por auditoría)
+# =========================
+!reports/canonical/**
+!reports/canonical/**/*.csv
+!reports/canonical/**/*.json
+!reports/canonical/**/CHECKSUMS.txt
+
+!reports/calibration/**
+!reports/calibration/**/*.csv
+!reports/calibration/**/*.json
+
+!reports/summary/summary_consolidated.csv
+!reports/summary/summary_consolidated.json

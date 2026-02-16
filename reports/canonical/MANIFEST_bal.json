@@ -1,0 +1,26 @@
+{
+  "version": "1.0",
+  "generated_at": "2026-02-16T00:12:07.455121Z",
+  "tag": "PC7_SECOND_PASS",
+  "risk_posture": "balanceado",
+  "files": {
+    "canonical_csv": {
+      "path": "decisiones_bal_canonical.csv",
+      "sha256": "c46fb2c11659111331942979abe87f2e44a3789296b6e6f30b7af723647d020b",
+      "size_bytes": 188882,
+      "format": "CSV UTF-8 (Unix line endings)",
+      "float_format": "%.6f",
+      "order": "loan_id ASC"
+    },
+    "source_xlsx": {
+      "path": "decisiones_finales_balanceado.xlsx",
+      "sha256": "eaf20ccc156e88fd5c056c02f787dcc0cc51ae8db1df52c210fc4b66524810b1",
+      "size_bytes": 451999,
+      "warning": "XLSX hash puede variar por metadata Excel; usar CSV como referencia canónica"
+    }
+  },
+  "verification": {
+    "command": "python _tmp/verify_manifest.py --csv decisiones_bal_canonical.csv --manifest MANIFEST_bal.json",
+    "expected_csv_hash": "c46fb2c11659111331942979abe87f2e44a3789296b6e6f30b7af723647d020b"
+  }
+}

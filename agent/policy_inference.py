@@ -270,12 +270,12 @@ def _pick_default_vn_loan_path() -> Optional[str]:
 
     legacy = os.path.join(MODELS_DIR, "vecnormalize_final.pkl")
     if os.path.exists(legacy):
-        logger.warning("⚠️ Usando VN legacy para LOAN: models/vecnormalize_final.pkl. Recomendado: vecnormalize_loan.pkl.")
+        logger.warning("[WARNING] Usando VN legacy para LOAN: models/vecnormalize_final.pkl. Recomendado: vecnormalize_loan.pkl.")
         return legacy
 
     legacy2 = os.path.join(MODELS_DIR, "best_model_vecnormalize.pkl")
     if os.path.exists(legacy2):
-        logger.warning("⚠️ Usando VN legacy2 para LOAN: models/best_model_vecnormalize.pkl. Recomendado: vecnormalize_loan.pkl.")
+        logger.warning("[WARNING] Usando VN legacy2 para LOAN: models/best_model_vecnormalize.pkl. Recomendado: vecnormalize_loan.pkl.")
         return legacy2
 
     return None
@@ -297,7 +297,7 @@ def _load_vecnormalize_loan(vn_path: Optional[str], dummy_env: DummyVecEnv) -> O
     if not vn_path:
         return None
     if not os.path.exists(vn_path):
-        logger.warning(f"⚠️ VecNormalize LOAN no existe: {vn_path}")
+        logger.warning(f"[WARNING] VecNormalize LOAN no existe: {vn_path}")
         return None
     try:
         vn = VecNormalize.load(vn_path, dummy_env)
@@ -308,13 +308,13 @@ def _load_vecnormalize_loan(vn_path: Optional[str], dummy_env: DummyVecEnv) -> O
             env_shape = getattr(dummy_env.observation_space, "shape", None)
             vn_mean = getattr(getattr(vn, "obs_rms", None), "mean", None)
             vn_shape = getattr(vn_mean, "shape", None)
-            logger.warning(f"⚠️ VecNormalize LOAN INVALIDADO por mismatch: env={env_shape} vs vn={vn_shape} | {vn_path}")
+            logger.warning(f"[WARNING] VecNormalize LOAN INVALIDADO por mismatch: env={env_shape} vs vn={vn_shape} | {vn_path}")
             return None
 
-        logger.info(f"🔄 VecNormalize LOAN cargado: {vn_path}")
+        logger.info(f"[VECNORM] VecNormalize LOAN cargado: {vn_path}")
         return vn
     except Exception as e:
-        logger.warning(f"⚠️ VecNormalize LOAN incompatible: {vn_path} | {e}")
+        logger.warning(f"[WARNING] VecNormalize LOAN incompatible: {vn_path} | {e}")
         return None
 
 
@@ -475,7 +475,7 @@ def load_portfolio_any(path: str) -> pd.DataFrame:
         if "RORWA" not in df.columns:
             df["RORWA"] = np.where(rwa > 0, ni / rwa, 0.0)
 
-    logger.info(f"📥 Cartera cargada correctamente ({len(df):,} préstamos)")
+    logger.info(f"[PORTFOLIO] Cartera cargada correctamente ({len(df):,} préstamos)")
     return df
 
 
@@ -490,10 +490,10 @@ def load_policy(model_path: str, cfg_inf: InferenceConfig) -> Tuple[PPO, Optiona
 
     device_final = _device_auto(cfg_inf.device)
     model = PPO.load(model_path, device=device_final)
-    logger.info(f"🤖 Modelo PPO cargado desde: {model_path} [device={device_final}]")
+    logger.info(f"[MODEL] Modelo PPO cargado desde: {model_path} [device={device_final}]")
 
     if vn_env is None:
-        logger.warning("⚠️ PPO sin VecNormalize (se usará obs raw).")
+        logger.warning("[WARNING] PPO sin VecNormalize (se usará obs raw).")
     return model, vn_env
 
 
@@ -552,7 +552,7 @@ def _run_inference_for_posture(
     LGD_ALTO = 0.70
 
     logger.info(
-        f"🏦 Inferencia MICRO — posture={posture} | profile={bank_profile.value} | strategy={bank_strat.name} "
+        f"[INFERENCE_MICRO] Inferencia MICRO — posture={posture} | profile={bank_profile.value} | strategy={bank_strat.name} "
         f"| W_EVA={W_EVA:.2f} W_CAP={W_CAPITAL:.2f} W_PNL={W_PNL:.2f} | persist_outputs={bool(cfg_inf.persist_outputs)}"
     )
 
@@ -563,11 +563,11 @@ def _run_inference_for_posture(
     try:
         model, vn_env = load_policy(cfg_inf.model_path, cfg_inf)
     except Exception as e:
-        logger.warning(f"⚠️ No se pudo cargar el modelo PPO; se usará lógica financiera pura: {e}")
+        logger.warning(f"[WARNING] No se pudo cargar el modelo PPO; se usará lógica financiera pura: {e}")
 
     decisions: List[Dict[str, Any]] = []
 
-    for _, row in df.iterrows():
+    for idx, (_, row) in enumerate(df.iterrows(), start=0):
         loan_id = row[cfg.ID_COL]
 
         base_eva = _safe_float(row.get("EVA", 0.0))
@@ -591,11 +591,13 @@ def _run_inference_for_posture(
         except Exception:
             base_secured = False
 
-        ingreso_mensual = row.get("ingreso_mensual", None)
-        cfo_m = row.get("cashflow_operativo_mensual", None)
+        # ✅ FIX CRÍTICO: Uso de nombres correctos de columnas (con fallback para compatibilidad)
+        ingreso_mensual = row.get("monthly_income", row.get("ingreso_mensual", None))
+        cfo_m = row.get("monthly_cfo", row.get("cashflow_operativo_mensual", None))
 
-        pti_base = _safe_float(row.get("PTI", np.nan), default=np.nan)
-        dscr_base = _safe_float(row.get("DSCR", np.nan), default=np.nan)
+        # PTI/DSCR base con fallback a columnas _pre
+        pti_base = _safe_float(row.get("PTI_pre", row.get("PTI", np.nan)), default=np.nan)
+        dscr_base = _safe_float(row.get("DSCR_pre", row.get("DSCR", np.nan)), default=np.nan)
         pti_base = None if not np.isfinite(pti_base) else float(pti_base)
         dscr_base = None if not np.isfinite(dscr_base) else float(dscr_base)
 
@@ -606,6 +608,10 @@ def _run_inference_for_posture(
 
         restruct: Optional[Dict[str, Any]] = None
         try:
+            # DEBUG: Log viability inputs
+            if idx < 5:  # Solo primeros 5 para evitar spam
+                logger.info(f"🔍 DEBUG loan_id={loan_id} | ingreso_mensual={ingreso_mensual} | cfo_m={cfo_m} | PTI_pre={pti_pre} | DSCR_pre={dscr_pre}")
+           
             restruct = optimize_restructure(
                 ead=base_ead,
                 rate=base_rate,
@@ -619,7 +625,7 @@ def _run_inference_for_posture(
                 hurdle=hurdle,
             )
         except Exception as e:
-            logger.warning(f"⚠️ Error optimize_restructure loan_id={loan_id}: {e}")
+            logger.warning(f"[WARNING] Error optimize_restructure loan_id={loan_id}: {e}")
             restruct = None
 
         eva_post = base_eva
@@ -712,7 +718,7 @@ def _run_inference_for_posture(
         try:
             price_for_sell = _sale_pack_from_row(row, posture)
         except Exception as e:
-            logger.warning(f"⚠️ Error simulate_npl_price loan_id={loan_id}: {e}")
+            logger.warning(f"[WARNING] Error simulate_npl_price loan_id={loan_id}: {e}")
             price_for_sell = {}
 
         precio_opt = _safe_float(price_for_sell.get("precio_optimo", 0.0))
@@ -1153,7 +1159,7 @@ def parse_args() -> InferenceConfig:
 
     vn = a.vn.strip() or None
     if vn and not os.path.exists(vn):
-        logger.warning(f"⚠️ --vn indicado pero no existe: {vn}. Se ignorará.")
+        logger.warning(f"[WARNING] --vn indicado pero no existe: {vn}. Se ignorará.")
         vn = None
 
     out_dir = a.out_dir.strip() or None

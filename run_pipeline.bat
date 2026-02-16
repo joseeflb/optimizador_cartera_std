@@ -8,13 +8,14 @@ set "ROOT_DIR=%~dp0"
 cd /d "%ROOT_DIR%"
 
 REM ============================================================
-REM PYTHON FIJO (evita PATH y WindowsApps)
+REM PYTHON (launcher genérico)
 REM ============================================================
-set "PY_EXE=C:\Users\josef\AppData\Local\Python\pythoncore-3.14-64\python.exe"
+set "PY_EXE=py"
 
-if not exist "%PY_EXE%" (
-  echo ERROR: No se encuentra Python en:
-  echo   %PY_EXE%
+where py >nul 2>&1
+if errorlevel 1 (
+  echo ERROR: No se encuentra el launcher de Python (py).
+  echo Por favor instala Python desde python.org
   pause
   exit /b 1
 )

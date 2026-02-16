@@ -11,7 +11,8 @@ REM ============================
 REM PYTHON (launcher)
 REM ============================
 set "PY_EXE=py"
-set "PY_ARGS=-3.11"
+set "PY_ARGS="
+
 
 %PY_EXE% %PY_ARGS% --version >nul 2>&1
 if errorlevel 1 (

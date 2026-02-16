@@ -927,7 +927,7 @@ def _run_portfolio_inference_for_posture(
         export_styled_excel_portfolio(df_final, final_path)
     else:
         df_final.to_csv(final_path, index=False, encoding="utf-8-sig")
-    logger.info(f"📊 Cartera final exportada a {final_path}")
+    logger.info(f"[EXPORT] Cartera final exportada a {final_path}")
 
     summary_path = os.path.join(out_dir, summary_name)
     if not df_steps.empty:
@@ -953,7 +953,7 @@ def _run_portfolio_inference_for_posture(
             }
         )
         df_summary.to_csv(summary_path, index=False, encoding="utf-8-sig")
-        logger.info(f"💾 Resumen agregado macro guardado en {summary_path}")
+        logger.info(f"[SUMMARY] Resumen agregado macro guardado en {summary_path}")
 
     return df_steps, df_final, traj_path, final_path, summary_path
 

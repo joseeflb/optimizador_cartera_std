@@ -1,0 +1,26 @@
+{
+  "version": "1.0",
+  "generated_at": "2026-02-16T00:11:57.033616Z",
+  "tag": "PC7_SECOND_PASS",
+  "risk_posture": "prudencial",
+  "files": {
+    "canonical_csv": {
+      "path": "decisiones_pru_canonical.csv",
+      "sha256": "8ec2e283ac7c9614fe50345d6a44421b458569a4cacb5c167188921d2e0ed035",
+      "size_bytes": 215811,
+      "format": "CSV UTF-8 (Unix line endings)",
+      "float_format": "%.6f",
+      "order": "loan_id ASC"
+    },
+    "source_xlsx": {
+      "path": "decisiones_finales_prudencial.xlsx",
+      "sha256": "605c9e8461f6f84a54c962dda73e883d12be86364c8f6e011e459d07be3e38d2",
+      "size_bytes": 439102,
+      "warning": "XLSX hash puede variar por metadata Excel; usar CSV como referencia canónica"
+    }
+  },
+  "verification": {
+    "command": "python _tmp/verify_manifest.py --csv decisiones_pru_canonical.csv --manifest MANIFEST_pru.json",
+    "expected_csv_hash": "8ec2e283ac7c9614fe50345d6a44421b458569a4cacb5c167188921d2e0ed035"
+  }
+}

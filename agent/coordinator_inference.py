@@ -944,6 +944,11 @@ def _combine_decisions(
     missing_viability_list: List[bool] = []
     restruct_viable_list: List[bool] = []  # útil para hard-guardrails posteriores
 
+    # ✅ BANK-READY: Parámetros de reestructura (propagar desde micro)
+    plazo_optimo_list: List[float] = []
+    tasa_nueva_list: List[float] = []
+    quita_list: List[float] = []
+
     g = _get_guardrails(risk_posture)
     hurdle = _safe_float(getattr(cfg.CONFIG.regulacion, "hurdle_rate", 0.0))
     rp_l = (risk_posture or "balanceado").strip().lower()
@@ -1234,6 +1239,11 @@ def _combine_decisions(
         missing_viability_list.append(bool(missing_viability_inputs))
         restruct_viable_list.append(bool(restruct_feasible))
 
+        # ✅ BANK-READY: Parámetros de reestructura (desde micro)
+        plazo_optimo_list.append(_safe_float(r.get("plazo_optimo", np.nan), np.nan))
+        tasa_nueva_list.append(_safe_float(r.get("tasa_nueva", np.nan), np.nan))
+        quita_list.append(_safe_float(r.get("quita", np.nan), np.nan))
+
     # saneo final de longitudes
     accion_macro_list = _pad_or_trim(accion_macro_list, "MANTENER")
     macro_assignment_list = _pad_or_trim(macro_assignment_list, "NO_ASIGNADO")
@@ -1265,6 +1275,11 @@ def _combine_decisions(
     fire_sale_triggers_list = _pad_or_trim(fire_sale_triggers_list, "")
     missing_viability_list = _pad_or_trim(missing_viability_list, False)
     restruct_viable_list = _pad_or_trim(restruct_viable_list, False)
+
+    # ✅ BANK-READY: Saneo parámetros de reestructura
+    plazo_optimo_list = _pad_or_trim(plazo_optimo_list, np.nan)
+    tasa_nueva_list = _pad_or_trim(tasa_nueva_list, np.nan)
+    quita_list = _pad_or_trim(quita_list, np.nan)
 
     # Columnas finales
     df["Accion_macro"] = accion_macro_list
@@ -1307,6 +1322,19 @@ def _combine_decisions(
     df["Missing_Viability_Inputs"] = missing_viability_list
     df["restruct_viable"] = restruct_viable_list  # para hard guardrails y auditoría
 
+    # ✅ BANK-READY: Parámetros de reestructura
+    df["plazo_optimo"] = plazo_optimo_list
+    df["tasa_nueva"] = tasa_nueva_list
+    df["quita"] = quita_list
+
+    # ✅ BANK-READY: Campos de escalación y comité (inicialización)
+    df["case_status"] = "NORMAL"  # NORMAL | HOLD_NO_EXECUTABLE_ACTION | ESCALATED
+    df["next_step"] = ""  # WORKOUT_REVIEW | LEGAL_ACTION | PRICING_REVIEW
+    df["next_step_reason"] = ""  # motivo específico de escalación
+    df["review_due_days"] = np.nan  # días para revisión (ej. 30)
+    df["required_data_flags"] = ""  # lista de datos faltantes para acción
+    df["override_reason"] = ""  # razón de override si aplica
+
     # Reorden visual (enforce_schema reordenará canónicas primero)
     preferred = [
         "loan_id", "segment", "EAD", "RW",
@@ -1314,6 +1342,10 @@ def _combine_decisions(
         "Accion_final", "Convergencia_Caso",
         "Reason_Code", "Decision_Governance",
         "Missing_Viability_Inputs", "restruct_viable",
+        "plazo_optimo", "tasa_nueva", "quita",  # parámetros de reestructura
+        "PTI_pre", "PTI_post", "DSCR_pre", "DSCR_post",
+        "case_status", "next_step", "next_step_reason", "review_due_days",
+        "required_data_flags", "override_reason",
         "Rationale_CIB", "Macro_Evidence",
         "Fire_Sale", "FireSale_Enabled", "FireSale_Triggered", "FireSale_Triggers",
         "Price_to_EAD", "fire_sale_threshold",
@@ -1339,6 +1371,464 @@ def _combine_decisions(
 
     df["capital_release_cf"] = pd.to_numeric(df["capital_release_cf"], errors="coerce")
     df.loc[df["capital_release_cf"].isna(), "capital_release_cf"] = (rwa_pre * float(ratio_total))
+
+    # ===========================================================
+    # 🆕 EJECUTABILIDAD: RECOMENDACIÓN vs EJECUCIÓN
+    # ===========================================================
+    # Separación clara entre:
+    # - RECOMENDACIÓN: Lo que el modelo/analista recomienda (exported siempre)
+    # - EJECUCIÓN: Lo que es realmente ejecutable hoy (gates, mandatos, fallbacks)
+    # ===========================================================
+
+    logger.info("[EXECUTABILITY] Aplicando gates de ejecutabilidad (RECOMENDACIÓN vs EJECUCIÓN)...")
+
+    # Cargar BankStrategy con knobs de ejecutabilidad
+    from config import BANK_STRATEGIES, BankProfile
+    
+    posture_map = {
+        "prudencial": BankProfile.PRUDENTE,
+        "balanceado": BankProfile.BALANCEADO,
+        "desinversion": BankProfile.DESINVERSION,
+    }
+    posture_key = (risk_posture or "balanceado").lower().strip()
+    bank_profile = posture_map.get(posture_key, BankProfile.BALANCEADO)
+    strategy = BANK_STRATEGIES[bank_profile]
+    
+    # Knobs ejecutabilidad
+    sale_floor_ratio = strategy.sale_floor_ratio
+    loss_cap_pct = strategy.loss_cap_pct
+    min_acceptance_score = strategy.min_acceptance_score
+    max_restructure_share = strategy.max_restructure_share
+    # 🆕 PC7 SECOND PASS - Mandatos con tiering + percentiles (NO thresholds absolutos)
+    mandate_share_target = strategy.mandate_share_target  # % objetivo (0.25 DESINV)
+    mandate_tier1_share = strategy.mandate_tier1_share  # % genuinamente obligatorio (0.05)
+    mandate_w_rwa = strategy.mandate_w_rwa  # peso RWA en score
+    mandate_w_age = strategy.mandate_w_age  # peso age_npl en score
+    mandate_w_recovery = strategy.mandate_w_recovery  # peso (1-recovery) en score
+    mandate_loss_tolerance = strategy.mandate_loss_tolerance
+    # 🆕 NPL BANK-GRADE - Disciplina económica
+    recovery_min_pct = strategy.recovery_min_pct  # recovery mínimo para venta voluntaria
+    max_sell_share = strategy.max_sell_share  # cap de ventas VOLUNTARIAS (mandatos exentos)
+    
+    logger.info(f"[KNOBS] {posture_key.upper()}: sale_floor={sale_floor_ratio:.2f}, "
+                f"loss_cap={loss_cap_pct:.2f}, recovery_min={recovery_min_pct:.2%}, "
+                f"max_sell={max_sell_share:.0%}, min_accept={min_acceptance_score:.0f}, "
+                f"max_restruct={max_restructure_share:.0%}")
+    logger.info(f"[MANDATES] target={mandate_share_target:.1%}, tier1={mandate_tier1_share:.1%}, "
+                f"weights=(rwa={mandate_w_rwa:.1f}, age={mandate_w_age:.1f}, recovery={mandate_w_recovery:.1f})")
+
+    # -----------------------------------------------------------
+    # 1) RECOMENDACIÓN (ya existe en Accion_micro/Accion_macro)
+    # -----------------------------------------------------------
+    # recommended_action = lo que el análisis técnico recomienda (sin gates)
+    # Usamos la decisión "antes de guardrails" que es Accion_final actual
+    df["recommended_action"] = df["Accion_final"].astype(str).str.upper().str.strip()
+    
+    # Métricas de recomendación (ya existen)
+    df["recommended_sale_price"] = pd.to_numeric(df.get("precio_optimo", np.nan), errors="coerce")
+    df["recommended_sale_recovery"] = pd.to_numeric(df.get("recovery_sale", np.nan), errors="coerce")
+    
+    # Crear valor_referencia (proxy valor intrínseco) = max(book_value, recovery_restruct * EAD, recovery_sale * EAD * 1.1)
+    book_val = pd.to_numeric(df.get("book_value", np.nan), errors="coerce")
+    rec_rest = pd.to_numeric(df.get("recovery_restruct", np.nan), errors="coerce")
+    rec_sale = pd.to_numeric(df.get("recovery_sale", np.nan), errors="coerce")
+    ead_val = pd.to_numeric(df.get("EAD", np.nan), errors="coerce")
+    
+    val1 = book_val
+    val2 = rec_rest * ead_val
+    val3 = rec_sale * ead_val * 1.1  # factor esperanza de mejor bid
+    
+    df["valor_referencia"] = val1.combine(val2, max, fill_value=0).combine(val3, max, fill_value=0)
+    df["valor_referencia"] = df["valor_referencia"].fillna(ead_val * 0.40)  # fallback 40% EAD
+
+    # -----------------------------------------------------------
+    # 2) MANDATO DE VENTA (PC7 SECOND PASS: tiering + percentiles)
+    # -----------------------------------------------------------
+    logger.info("[MANDATE] Calculando sale_mandate (tiering + percentile-based scoring)...")
+    
+    rw_ratio = pd.to_numeric(df.get("RW", np.nan), errors="coerce")
+    
+    # 🆕 FORZAR RECÁLCULO de recovery_sale como precio_optimo / EAD 
+    # (ignorar recovery_sale pre-existente en portfolio que puede ser obsoleto)
+    logger.info(f"   [INFO] Calculando recovery_sale = precio_optimo/EAD (NPL actual)")
+    precio_opt = pd.to_numeric(df.get("precio_optimo", np.nan), errors="coerce")
+    ead_val_mandate = pd.to_numeric(df.get("EAD", np.nan), errors="coerce").replace(0, np.nan)
+    rec_sale_val = (precio_opt / ead_val_mandate).replace([np.inf, -np.inf], np.nan).fillna(0)
+    df["recovery_sale"] = rec_sale_val  # Sobrescribir con precio actual
+    
+    # age_npl: priorizar age_npl_m (meses), si no existe usar DPD (días) convertido a meses
+    if "age_npl_m" in df.columns:
+        age_npl = pd.to_numeric(df.get("age_npl_m", np.nan), errors="coerce")
+    elif "DPD" in df.columns:
+        dpd_days = pd.to_numeric(df.get("DPD", np.nan), errors="coerce")
+        age_npl = (dpd_days / 30.0).fillna(0)  # Convertir días a meses
+        logger.info(f"   [INFO] Usando DPD (días) convertido a meses como proxy de age_npl_m")
+    else:
+        age_npl = pd.Series([0.0] * len(df))  # Default 0 si no hay columna
+        logger.warning(f"   [WARNING] Ni age_npl_m ni DPD encontrados - age_npl=0 (mandato por age desactivado)")
+    
+    # 🆕 PC7 SECOND PASS: score_mandate basado en percentiles (NO thresholds absolutos)
+    # score_mandate = w_rwa * RW_normalized + w_age * age_normalized + w_recovery * (1 - recovery_rate)
+    # Normalización: min-max a [0,1] para componibilidad
+    
+    rw_norm = (rw_ratio - rw_ratio.min()) / (rw_ratio.max() - rw_ratio.min() + 1e-9)
+    age_norm = (age_npl - age_npl.min()) / (age_npl.max() - age_npl.min() + 1e-9)
+    recovery_penalty = (1.0 - rec_sale_val).clip(0, 1)  # ya en [0,1]
+    
+    score_mandate = (
+        mandate_w_rwa * rw_norm + 
+        mandate_w_age * age_norm + 
+        mandate_w_recovery * recovery_penalty
+    )
+    df["score_mandate"] = score_mandate.fillna(0)
+    
+    # TIER 1: Top mandate_tier1_share% (genuinamente obligatorio - worst of worst)
+    n_tier1 = max(1, int(len(df) * mandate_tier1_share))
+    tier1_threshold = df["score_mandate"].nlargest(n_tier1).min() if n_tier1 > 0 else 999
+    
+    # TIER 2: Top mandate_share_target% total (incluye TIER1 + capital pressure)
+    n_total = max(1, int(len(df) * mandate_share_target))
+    tier2_threshold = df["score_mandate"].nlargest(n_total).min() if n_total > 0 else 999
+    
+    df["sale_mandate_tier"] = "NONE"
+    df.loc[df["score_mandate"] >= tier1_threshold, "sale_mandate_tier"] = "TIER1_SEVERE"
+    df.loc[(df["score_mandate"] >= tier2_threshold) & (df["score_mandate"] < tier1_threshold), "sale_mandate_tier"] = "TIER2_CAPITAL_PRESSURE"
+    
+    df["sale_mandate"] = df["sale_mandate_tier"] != "NONE"
+    
+    # sale_mandate_reason (auditable con componentes dominantes)
+    def _build_mandate_reason(row):
+        if row.get("sale_mandate_tier", "NONE") == "NONE":
+            return ""
+        tier = row.get("sale_mandate_tier")
+        idx = row.name
+        score = row.get("score_mandate", 0)
+        # Componentes
+        rw_val = rw_ratio.iloc[idx] if idx < len(rw_ratio) else 0
+        age_val = age_npl.iloc[idx] if idx < len(age_npl) else 0
+        rec_val = rec_sale_val.iloc[idx] if idx < len(rec_sale_val) else 0
+        
+        components = []
+        if mandate_w_rwa > 0 and rw_val > 0:
+            components.append(f"RWA={rw_val:.2f}")
+        if mandate_w_age > 0 and age_val > 0:
+            components.append(f"AGE={age_val:.0f}m")
+        if mandate_w_recovery > 0:
+            components.append(f"RECOVERY={rec_val:.1%}")
+        
+        comp_str = ",".join(components) if components else "COMPOSITE"
+        return f"{tier}(score={score:.2f}|{comp_str})"
+    
+    df["sale_mandate_reason"] = df.apply(_build_mandate_reason, axis=1)
+    
+    n_mandate = df["sale_mandate"].sum()
+    n_tier1 = (df["sale_mandate_tier"] == "TIER1_SEVERE").sum()
+    n_tier2 = (df["sale_mandate_tier"] == "TIER2_CAPITAL_PRESSURE").sum()
+    logger.info(f"   [OK] {n_mandate}/{len(df)} préstamos con sale_mandate=True")
+    logger.info(f"   [TIER1_SEVERE] {n_tier1} ({n_tier1/len(df)*100:.1f}%)")
+    logger.info(f"   [TIER2_CAPITAL_PRESSURE] {n_tier2} ({n_tier2/len(df)*100:.1f}%)")
+    logger.info(f"   [SCORE_MANDATE] rango: [{df['score_mandate'].min():.2f}, {df['score_mandate'].max():.2f}]")
+
+    # -----------------------------------------------------------
+    # 3) GATE VENTA EJECUTABLE (precio no insultante + loss cap + recovery mínimo)
+    # -----------------------------------------------------------
+    logger.info("[SALE_GATE] Calculando sale_executable (precio + loss + recovery NPL bank-grade)...")
+    
+    # Sale price = precio_optimo (simulado por price_simulator)
+    sale_price = pd.to_numeric(df.get("precio_optimo", np.nan), errors="coerce")
+    
+    valor_ref = df["valor_referencia"]
+    
+    # Gate 1: sale_insulting_flag = precio < sale_floor_ratio * valor_referencia
+    df["sale_insulting_flag"] = (sale_price < sale_floor_ratio * valor_ref) | sale_price.isna()
+    
+    # Gate 2: loss actual = (EAD - sale_price) / EAD
+    sale_loss_pct = (ead_val - sale_price) / ead_val.replace(0, np.nan)
+    df["sale_loss_pct"] = sale_loss_pct.clip(0, 1).fillna(0)
+    
+    # trade-off aceptable = loss <= loss_cap (sin mandato) o loss <= mandate_loss_tolerance (con mandato)
+    loss_threshold = df["sale_mandate"].apply(lambda x: mandate_loss_tolerance if x else loss_cap_pct)
+    df["sale_within_loss_cap"] = df["sale_loss_pct"] <= loss_threshold
+    
+    # Gate 3 🆕 NPL BANK-GRADE: recovery_rate = sale_price / EAD (disciplina económica)
+    recovery_rate = sale_price / ead_val.replace(0, np.nan)
+    df["recovery_rate"] = recovery_rate.clip(0, 1).fillna(0)
+    df["sale_meets_recovery_min"] = df["recovery_rate"] >= recovery_min_pct
+    
+    # sale_executable = (NOT insulting) AND (within loss cap) AND (recovery_min O mandate)
+    # Rationale: mandatos dominan (venta sí o sí), pero ventas voluntarias deben cumplir recovery mínimo
+    df["sale_executable"] = (
+        (~df["sale_insulting_flag"]) & 
+        df["sale_within_loss_cap"] & 
+        (df["sale_meets_recovery_min"] | df["sale_mandate"])  # Mandato exime de recovery_min
+    )
+    
+    # Reason code para venta (auditable con 3 gates: insulting, loss_cap, recovery_min)
+    def _build_sale_reason(row):
+        if row.get("sale_mandate", False):
+            if row.get("sale_executable", False):
+                return "CAPITAL_MANDATE_EXECUTABLE"
+            else:
+                # Priority: insulting > loss_cap > recovery (aunque mandato exime recovery)
+                if row.get("sale_insulting_flag"):
+                    return "CAPITAL_MANDATE_BLOCKED_INSULTING_PRICE"
+                elif not row.get("sale_within_loss_cap"):
+                    return "CAPITAL_MANDATE_BLOCKED_LOSS_CAP"
+                else:
+                    return "CAPITAL_MANDATE_BLOCKED_OTHER"  # fallback (rare)
+        else:
+            if row.get("sale_executable", False):
+                return "VOLUNTARY_SALE_ACCEPTABLE"
+            else:
+                # Priority: insulting > loss_cap > recovery_min
+                if row.get("sale_insulting_flag"):
+                    return "SALE_BLOCKED_INSULTING_PRICE"
+                elif not row.get("sale_within_loss_cap"):
+                    return "SALE_BLOCKED_LOSS_CAP"
+                elif not row.get("sale_meets_recovery_min"):
+                    return "SALE_BLOCKED_RECOVERY_TOO_LOW"  # 🆕 NPL bank-grade gate
+                else:
+                    return "SALE_BLOCKED_OTHER"  # fallback
+    
+    df["sale_reason_code"] = df.apply(_build_sale_reason, axis=1)
+    
+    n_executable_sales = df["sale_executable"].sum()
+    n_insulting = df["sale_insulting_flag"].sum()
+    n_recovery_low = (~df["sale_meets_recovery_min"]).sum()
+    logger.info(f"   [OK] {n_executable_sales}/{len(df)} ventas ejecutables | "
+                f"{n_insulting} insultantes | {n_recovery_low} recovery<{recovery_min_pct:.0%}")
+
+    # -----------------------------------------------------------
+    # 4) GATE REESTRUCTURA EJECUTABLE (acceptance_score)
+    # -----------------------------------------------------------
+    logger.info("[ACCEPTANCE] Calculando acceptance_score (ejecutabilidad reestructura)...")
+    
+    # Acceptance score basado en agresividad de oferta (0-100)
+    # Penaliza: quita alta, plazo largo, tasa nueva alta
+    # Premia: mejora DSCR/PTI, coherencia económica
+    
+    quita_val = pd.to_numeric(df.get("quita", np.nan), errors="coerce").fillna(0)
+    plazo_val = pd.to_numeric(df.get("plazo_optimo", np.nan), errors="coerce").fillna(120)
+    tasa_val = pd.to_numeric(df.get("tasa_nueva", np.nan), errors="coerce").fillna(0.05)
+    dscr_post = pd.to_numeric(df.get("DSCR_post", np.nan), errors="coerce")
+    pti_post = pd.to_numeric(df.get("PTI_post", np.nan), errors="coerce")
+    
+    # Base score = 50
+    score = pd.Series(50.0, index=df.index)
+    
+    # Penalización quita: -30 si quita=30%, 0 si quita=0%
+    score -= quita_val * 100  # quita 0.30 → -30 puntos
+    
+    # Penalización plazo: -20 si plazo=240m, -10 si 120m, 0 si 60m
+    score -= (plazo_val - 60) / 180 * 20  # plazo 240 → -20, plazo 120 → -6.7
+    
+    # Penalización tasa alta: -10 si tasa=10%, 0 si tasa=5%
+    score -= (tasa_val - 0.05) / 0.05 * 10  # tasa 10% → -10
+    
+    # Bonificación DSCR: +20 si DSCR>1.5, +10 si DSCR=1.2, 0 si DSCR=1.0
+    score += ((dscr_post.fillna(1.0) - 1.0) / 0.5 * 20).clip(0, 25)
+    
+    # Bonificación PTI bajo: +15 si PTI<25%, +7.5 si PTI=30%, 0 si PTI>35%
+    score += ((0.35 - pti_post.fillna(0.35)) / 0.10 * 15).clip(0, 20)
+    
+    df["acceptance_score"] = score.clip(0, 100)
+    
+    # restruct_executable = viable AND acceptance >= threshold
+    viable_bool = df.get("restruct_viable", pd.Series(False, index=df.index)).apply(_safe_bool_cell)
+    df["restruct_executable"] = viable_bool & (df["acceptance_score"] >= min_acceptance_score)
+    
+    # Reason code reestructura
+    def _build_restruct_reason(row):
+        if not row.get("restruct_viable", False):
+            return "RESTRUCT_NOT_VIABLE_MISSING_DATA_OR_GATES"
+        elif row.get("acceptance_score", 0) < min_acceptance_score:
+            return f"RESTRUCT_BLOCKED_LOW_ACCEPTANCE({row.get('acceptance_score', 0):.0f}<{min_acceptance_score:.0f})"
+        else:
+            return "RESTRUCT_EXECUTABLE_CLEAN_TERMS"
+    
+    df["restructure_reason_code"] = df.apply(_build_restruct_reason, axis=1)
+    
+    n_executable_restruct = df["restruct_executable"].sum()
+    logger.info(f"   [OK] {n_executable_restruct}/{len(df)} reestructuras ejecutables")
+    logger.info(f"   [OK] acceptance_score rango: [{df['acceptance_score'].min():.0f}, {df['acceptance_score'].max():.0f}]")
+
+    # -----------------------------------------------------------
+    # 5) DECISIÓN FINAL CON FALLBACKS
+    # -----------------------------------------------------------
+    logger.info("[DECISION] Aplicando lógica de decisión con fallbacks...")
+    
+    # Guardamos acción original como recomendación
+    df["action_before_executability"] = df["Accion_final"].copy()
+    
+    # Lógica de decisión (orden de precedencia)
+    final_actions = []
+    execution_status = []  # NORMAL | MANDATE_BLOCKED | RECOMMENDATION_NOT_EXECUTABLE
+    
+    for idx, row in df.iterrows():
+        rec_action = str(row.get("recommended_action", "MANTENER")).upper()
+        
+        # CASO 1: MANDATO DE VENTA (sí o sí)
+        if row.get("sale_mandate", False):
+            if row.get("sale_executable", False):
+                # Mandato + ejecutable → VENDER
+                final_actions.append("VENDER")
+                execution_status.append("MANDATE_EXECUTED")
+            else:
+                # Mandato bloqueado por loss-cap o insulting → MANTENER temporal
+                final_actions.append("MANTENER")
+                execution_status.append("MANDATE_BLOCKED")
+        
+        # CASO 2: SIN MANDATO - orden lógico
+        else:
+            # Primero intentar la recomendación original
+            if rec_action == "VENDER":
+                if row.get("sale_executable", False):
+                    final_actions.append("VENDER")
+                    execution_status.append("NORMAL")
+                elif row.get("restruct_executable", False):
+                    # Fallback: venta no ejecutable → reestructura
+                    final_actions.append("REESTRUCTURAR")
+                    execution_status.append("FALLBACK_RESTRUCT")
+                else:
+                    # Ni venta ni restructura → mantener
+                    final_actions.append("MANTENER")
+                    execution_status.append("NO_EXECUTABLE_ACTION")
+            
+            elif rec_action == "REESTRUCTURAR":
+                if row.get("restruct_executable", False):
+                    final_actions.append("REESTRUCTURAR")
+                    execution_status.append("NORMAL")
+                elif row.get("sale_executable", False):
+                    # Fallback: reestructura no ejecutable → venta
+                    final_actions.append("VENDER")
+                    execution_status.append("FALLBACK_SALE")
+                else:
+                    # Ni reestructura ni venta → mantener
+                    final_actions.append("MANTENER")
+                    execution_status.append("NO_EXECUTABLE_ACTION")
+            
+            else:  # MANTENER
+                final_actions.append("MANTENER")
+                execution_status.append("NORMAL")
+    
+    df["final_action_executability"] = final_actions
+    df["execution_status"] = execution_status
+    
+    # Actualizar case_status para mandatos bloqueados
+    mandate_blocked = df["execution_status"] == "MANDATE_BLOCKED"
+    if mandate_blocked.any():
+        df.loc[mandate_blocked, "case_status"] = "MANDATE_BLOCKED"
+        df.loc[mandate_blocked, "next_step"] = "MARKET_SALE_ESCALATION"
+        df.loc[mandate_blocked, "next_step_reason"] = "CAPITAL_MANDATE_REQUIRES_SALE_BUT_PRICE_INSULTING_OR_LOSS_EXCEEDS_CAP"
+        df.loc[mandate_blocked, "review_due_days"] = 14  # revisión urgente
+        df.loc[mandate_blocked, "override_reason"] = "TEMPORARY_HOLD_UNTIL_MARKET_IMPROVES_OR_MANDATE_OVERRIDE"
+    
+    # Actualizar case_status para sin acción ejecutable
+    no_executable = df["execution_status"] == "NO_EXECUTABLE_ACTION"
+    if no_executable.any():
+        df.loc[no_executable, "case_status"] = "HOLD_NO_EXECUTABLE_ACTION"
+        df.loc[no_executable, "next_step"] = "WORKOUT_REVIEW"
+        df.loc[no_executable, "next_step_reason"] = "NEITHER_SALE_NOR_RESTRUCTURE_EXECUTABLE_TODAY"
+        df.loc[no_executable, "review_due_days"] = 30
+    
+    # Sobrescribir Accion_final con la decisión ejecutable
+    df["Accion_final"] = df["final_action_executability"]
+    
+    # Stats
+    action_dist = df["Accion_final"].value_counts()
+    status_dist = df["execution_status"].value_counts()
+    logger.info(f"[STATS] Distribución final de acciones:")
+    for action, count in action_dist.items():
+        logger.info(f"   {action}: {count} ({count/len(df)*100:.1f}%)")
+    logger.info(f"[STATS] Status de ejecución:")
+    for status, count in status_dist.items():
+        logger.info(f"   {status}: {count}")
+
+    # -----------------------------------------------------------
+    # 6) CAPACIDAD OPERATIVA (max_restructure_share)
+    # -----------------------------------------------------------
+    logger.info(f"🏭 Aplicando capacidad operativa (max {max_restructure_share:.0%} reestructuras)...")
+    
+    restruct_mask = df["Accion_final"] == "REESTRUCTURAR"
+    n_restruct_current = restruct_mask.sum()
+    max_allowed = int(len(df) * max_restructure_share)
+    
+    if n_restruct_current > max_allowed:
+        # Degradar las peores (menor acceptance_score) a MANTENER
+        restruct_df = df[restruct_mask].copy()
+        restruct_df_sorted = restruct_df.sort_values("acceptance_score", ascending=True)
+        n_to_degrade = n_restruct_current - max_allowed
+        degrade_indices = restruct_df_sorted.head(n_to_degrade).index
+        
+        df.loc[degrade_indices, "Accion_final"] = "MANTENER"
+        df.loc[degrade_indices, "execution_status"] = "CAPACITY_LIMIT"
+        df.loc[degrade_indices, "case_status"] = "HOLD_CAPACITY_LIMIT"
+        df.loc[degrade_indices, "next_step"] = "WAIT_CAPACITY_OR_FALLBACK_SALE"
+        df.loc[degrade_indices, "next_step_reason"] = f"RESTRUCTURE_CAPACITY_EXCEEDED({n_restruct_current}>{max_allowed})"
+        df.loc[degrade_indices, "review_due_days"] = 60
+        df.loc[degrade_indices, "override_reason"] = "CAPACITY_LIMIT_RESTRUCT_DOWNGRADED_TO_MAINTAIN"
+        
+        if "Reason_Code" in df.columns:
+            df.loc[degrade_indices, "Reason_Code"] = "RC14_CAPACITY_LIMIT_RESTRUCT"
+        
+        logger.info(f"   [WARNING] {n_to_degrade} reestructuras degradadas a MANTENER por capacidad")
+    else:
+        logger.info(f"   [OK] Capacidad OK: {n_restruct_current}/{max_allowed} reestructuras")
+
+    # -----------------------------------------------------------
+    # 7) 🆕 PC7 SECOND PASS - CAP DE VENTAS (max_sell_share solo VOLUNTARIAS, mandatos exentos)
+    # -----------------------------------------------------------
+    if max_sell_share < 1.0:  # Solo si hay cap
+        logger.info(f"🆕 Aplicando cap de ventas VOLUNTARIAS (max {max_sell_share:.0%}, mandatos exentos)...")
+        
+        sell_mask = df["Accion_final"] == "VENDER"
+        n_ventas_total = sell_mask.sum()
+        n_ventas_mandate = (sell_mask & df["sale_mandate"]).sum()
+        n_ventas_voluntary = n_ventas_total - n_ventas_mandate
+        
+        # 🆕 PC7 SECOND PASS: mandatos NO cuentan contra el cap (dominan)
+        max_allowed_voluntary = int(len(df) * max_sell_share)
+        
+        if n_ventas_voluntary > max_allowed_voluntary and max_allowed_voluntary >= 0:
+            # Degradar ventas voluntarias con menor recovery_rate a MANTENER
+            voluntary_sell_df = df[sell_mask & (~df["sale_mandate"])].copy()
+            voluntary_sorted = voluntary_sell_df.sort_values("recovery_rate", ascending=True)
+            n_to_degrade = n_ventas_voluntary - max_allowed_voluntary
+            degrade_indices = voluntary_sorted.head(n_to_degrade).index
+            
+            df.loc[degrade_indices, "Accion_final"] = "MANTENER"
+            df.loc[degrade_indices, "execution_status"] = "VOLUME_CAP_LIMIT"
+            df.loc[degrade_indices, "case_status"] = "HOLD_VOLUME_CAP"
+            df.loc[degrade_indices, "next_step"] = "ALT_DISPOSAL_OR_WAIT"
+            df.loc[degrade_indices, "next_step_reason"] = (
+                f"SELL_VOLUME_CAP_EXCEEDED(voluntary={n_ventas_voluntary}>{max_allowed_voluntary}, "
+                f"mandates={n_ventas_mandate} EXEMPT)"
+            )
+            df.loc[degrade_indices, "review_due_days"] = 90
+            df.loc[degrade_indices, "override_reason"] = "VOLUME_CAP_VOLUNTARY_SELL_DOWNGRADED_TO_MAINTAIN"
+            
+            if "Reason_Code" in df.columns:
+                df.loc[degrade_indices, "Reason_Code"] = "RC15_VOLUME_CAP_VOLUNTARY_SELL"
+            
+            logger.info(f"   [WARNING] {n_to_degrade} ventas VOLUNTARIAS degradadas a MANTENER por cap")
+            logger.info(f"   [MANDATES] {n_ventas_mandate} ventas por MANDATO (exentas de cap, DOMINAN)")
+        else:
+            logger.info(f"   [OK] Cap OK: voluntary={n_ventas_voluntary}/{max_allowed_voluntary}, "
+                        f"mandates={n_ventas_mandate} (exentos)")
+        
+        # Totales finales
+        n_ventas_final = (df["Accion_final"] == "VENDER").sum()
+        n_mandate_final = ((df["Accion_final"] == "VENDER") & df["sale_mandate"]).sum()
+        logger.info(f"   [FINAL] Ventas totales={n_ventas_final} (mandate={n_mandate_final}, "
+                    f"voluntary={n_ventas_final - n_mandate_final})")
+    else:
+        logger.info(f"   [NO CAP] max_sell_share={max_sell_share:.0%} - Sin límite de ventas")
+
+    # Distribución final
+    action_dist_final = df["Accion_final"].value_counts()
+    logger.info(f"[STATS] Distribución FINAL de acciones (post-capacidad + post-volume-cap):")
+    for action, count in action_dist_final.items():
+        logger.info(f"   {action}: {count} ({count/len(df)*100:.1f}%)")
 
     # ===========================================================
     # HARD GUARDRAILS (post-construction, pre-realized)
@@ -1408,7 +1898,7 @@ def _combine_decisions(
 
             df.loc[fs_mask, "FireSale_Triggers"] = df.loc[fs_mask, "FireSale_Triggers"].apply(_append_trigger)
 
-        # Fallback de acción: REESTRUCTURAR si viable y sin missing inputs; si no, MANTENER
+        # ✅ BANK-READY: Determinar viabilidad ANTES de cambiar acción
         if "restruct_viable" in df.columns:
             rv = df["restruct_viable"].apply(_safe_bool_cell)
         else:
@@ -1421,8 +1911,42 @@ def _combine_decisions(
 
         can_restruct = rv & (~mvi)
 
-        _set_action_all(fs_mask & can_restruct, "REESTRUCTURAR")
-        _set_action_all(fs_mask & (~can_restruct), "MANTENER")
+        # ✅ BANK-READY: Si viable → REESTRUCTURAR; si no viable → MANTENER + metadata escalación
+        mask_can_rest = fs_mask & can_restruct
+        mask_cant_rest = fs_mask & (~can_restruct)
+
+        # Caso 1: Fire-sale bloqueado PERO reestructura viable → REESTRUCTURAR
+        _set_action_all(mask_can_rest, "REESTRUCTURAR")
+        if mask_can_rest.any():
+            df.loc[mask_can_rest, "override_reason"] = "FIRESALE_BLOCKED_RESTRUCTURE_VIABLE_APPLIED"
+
+        # Caso 2: Fire-sale bloqueado Y reestructura NO viable → MANTENER + escalación
+        _set_action_all(mask_cant_rest, "MANTENER")
+        if mask_cant_rest.any():
+            df.loc[mask_cant_rest, "case_status"] = "HOLD_NO_EXECUTABLE_ACTION"
+            df.loc[mask_cant_rest, "next_step"] = "WORKOUT_REVIEW"
+            df.loc[mask_cant_rest, "next_step_reason"] = "FIRESALE_BLOCKED_AND_RESTRUCTURE_NOT_VIABLE"
+            df.loc[mask_cant_rest, "review_due_days"] = 30  # estándar workout
+            df.loc[mask_cant_rest, "override_reason"] = "FIRESALE_BLOCKED_RESTRUCTURE_NOT_VIABLE_FALLBACK_MAINTAIN"
+            
+            # Flags de datos requeridos según el motivo de inviabilidad
+            def _build_required_data_flags(row):
+                flags = []
+                if pd.isna(row.get("book_value")) or row.get("book_value", 0) == 0:
+                    flags.append("book_value_tasacion")
+                if row.get("Missing_Viability_Inputs", False):
+                    seg = str(row.get("segment", "")).upper()
+                    if "MORTGAGE" in seg or "CONSUMER" in seg:
+                        flags.append("monthly_income")
+                    else:
+                        flags.append("monthly_cfo")
+                if pd.isna(row.get("secured")):
+                    flags.append("collateral_info")
+                if row.get("Fire_Sale", False) and pd.isna(row.get("Price_to_EAD")):
+                    flags.append("market_pricing")
+                return "; ".join(flags) if flags else "viability_assessment"
+            
+            df.loc[mask_cant_rest, "required_data_flags"] = df.loc[mask_cant_rest].apply(_build_required_data_flags, axis=1)
 
     # -----------------------------------------------------------
     # 2) RESTRUCT hard guardrail:
@@ -1608,6 +2132,54 @@ def _combine_decisions(
             df.loc[rest_mask2, "capital_liberado"], errors="coerce"
         ).fillna(0.0)
 
+    # ===========================================================
+    # ✅ BANK-READY: Post-procesamiento escalación
+    # Identificar casos que fueron bloqueados pero no tienen metadata de escalación
+    # ===========================================================
+    try:
+        # Casos críticos: Sell_Blocked=True + restruct_viable=False + Accion_final=MANTENER
+        if all(c in df.columns for c in ["Sell_Blocked", "restruct_viable", "Accion_final", "case_status"]):
+            sell_blocked = df["Sell_Blocked"].fillna(False).astype(bool)
+            not_viable = ~df["restruct_viable"].fillna(True).astype(bool)
+            is_mantener = df["Accion_final"].astype(str).str.upper().eq("MANTENER")
+            still_normal = df["case_status"].astype(str).eq("NORMAL")
+            
+            escalate_mask = sell_blocked & not_viable & is_mantener & still_normal
+            
+            if escalate_mask.any():
+                logger.info(f"[ESCALATION] Aplicando metadata de escalación a {escalate_mask.sum()} casos críticos (Sell_Blocked + restruct_viable=False → MANTENER)")
+                
+                df.loc[escalate_mask, "case_status"] = "HOLD_NO_EXECUTABLE_ACTION"
+                df.loc[escalate_mask, "next_step"] = "WORKOUT_REVIEW"
+                df.loc[escalate_mask, "next_step_reason"] = "FIRESALE_BLOCKED_AND_RESTRUCTURE_NOT_VIABLE"
+                df.loc[escalate_mask, "review_due_days"] = 30
+                
+                if "override_reason" in df.columns:
+                    current_override = df.loc[escalate_mask, "override_reason"].fillna("").astype(str)
+                    new_override = "FIRESALE_BLOCKED_RESTRUCTURE_NOT_VIABLE_FALLBACK_MAINTAIN"
+                    # Solo sobrescribir si está vacío
+                    df.loc[escalate_mask & (current_override == ""), "override_reason"] = new_override
+                
+                # Flags de datos requeridos
+                if "required_data_flags" in df.columns:
+                    def _build_flags_postproc(row):
+                        flags = []
+                        if pd.isna(row.get("book_value")) or row.get("book_value", 0) == 0:
+                            flags.append("book_value_tasacion")
+                        if row.get("Missing_Viability_Inputs", False):
+                            seg = str(row.get("segment", "")).upper()
+                            if "MORTGAGE" in seg or "CONSUMER" in seg:
+                                flags.append("monthly_income")
+                            else:
+                                flags.append("monthly_cfo")
+                        if pd.isna(row.get("secured")):
+                            flags.append("collateral_info")
+                        return "; ".join(flags) if flags else "viability_assessment"
+                    
+                    df.loc[escalate_mask, "required_data_flags"] = df.loc[escalate_mask].apply(_build_flags_postproc, axis=1)
+    except Exception as e:
+        logger.warning(f"⚠️ Error en post-procesamiento de escalación: {e}")
+
     return df
 
 
@@ -1719,12 +2291,12 @@ def run_coordinator_inference(
         sel = int(pd.Series(df_final.get("Macro_Selected", False)).sum())
         mw = int((df_final.get("Convergencia_Caso", "") == "MACRO_WINS").sum()) if "Convergencia_Caso" in df_final.columns else 0
         gr = int((df_final.get("Convergencia_Caso", "") == "GUARDRAIL_OVERRIDE").sum()) if "Convergencia_Caso" in df_final.columns else 0
-        logger.info(f"📌 Macro_Selected: {sel}/{n} ({(sel/max(n,1))*100:.1f}%) | MACRO_WINS={mw} | GUARDRAIL_OVERRIDE={gr}")
+        logger.info(f"[STATS] Macro_Selected: {sel}/{n} ({(sel/max(n,1))*100:.1f}%) | MACRO_WINS={mw} | GUARDRAIL_OVERRIDE={gr}")
     except Exception:
         pass
 
-    logger.info(f"✅ Inferencia coordinada ({risk_posture}) completada.")
-    logger.info(f"📊 Excel final: {excel_final}")
+    logger.info(f"[COMPLETED] Inferencia coordinada ({risk_posture}) completada.")
+    logger.info(f"[EXCEL] Excel final: {excel_final}")
     return out_dir_coord, excel_final
 
 
@@ -1913,7 +2485,7 @@ def main():
             export_audit_csv=bool(args.export_audit_csv),
         )
         outs = run_coordinator_inference_multi_posture(cfg_base)
-        logger.info(f"🏁 Multi-postura completado. Outputs: {outs}")
+        logger.info(f"[COMPLETED] Multi-postura completado. Outputs: {outs}")
     else:
         out_dir, excel_path = run_coordinator_inference(
             model_micro=args.model_micro,
@@ -1932,8 +2504,8 @@ def main():
             vecnorm_macro_path=args.vn_macro if (args.vn_macro and os.path.exists(args.vn_macro)) else None,
             vecnorm_loan_path=args.vn_loan if (args.vn_loan and os.path.exists(args.vn_loan)) else None,
         )
-        logger.info(f"🏁 Inferencia coordinada completada. Carpeta: {out_dir}")
-        logger.info(f"📌 Excel final: {excel_path}")
+        logger.info(f"[COMPLETED] Inferencia coordinada completada. Carpeta: {out_dir}")
+        logger.info(f"[EXCEL] Excel final: {excel_path}")
 
 
 if __name__ == "__main__":

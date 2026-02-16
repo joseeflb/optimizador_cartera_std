@@ -5,11 +5,12 @@ REM ============================================
 REM  SMOKE TEST BANCO L1.5
 REM ============================================
 
-REM --- Python fijo ---
-set "PY_EXE=C:\Users\josef\AppData\Local\Python\pythoncore-3.14-64\python.exe"
-if not exist "%PY_EXE%" (
-  echo ERROR: No se encuentra Python en:
-  echo   %PY_EXE%
+REM --- Python (launcher genérico) ---
+set "PY_EXE=py"
+where py >nul 2>&1
+if errorlevel 1 (
+  echo ERROR: No se encuentra el launcher de Python (py).
+  echo Por favor instala Python desde python.org
   pause
   exit /b 1
 )
