@@ -76,6 +76,16 @@ except Exception:
     def enforce_schema(df: pd.DataFrame) -> pd.DataFrame:  # fallback no-op
         return df
 
+# -----------------------------------------------------------
+# CONSTANTS
+# -----------------------------------------------------------
+OVERRIDE_LOG_COLS = [
+    "loan_id", "level", "from_action", "to_action", "portfolio_context", 
+    "posture", "run_id", "macro_action_used", "macro_rationales_short", 
+    "pti_actual", "dscr_actual", "pnl"
+]
+
+
 
 # ===========================================================
 # Exporter robusto (evita roturas por path)
@@ -2618,27 +2628,38 @@ def run_coordinator_inference(
     excel_final = os.path.join(out_dir_coord, f"decisiones_finales_{posture_suffix}.xlsx")
     export_styled_excel(df_final, excel_final)
     
-    # 🆕 Task 3: Override Log Export (ALWAYS)
+    # 🆕 Task 3: Override Log Export (ALWAYS) with consistent schema
     csv_overrides = os.path.join(out_dir_coord, f"overrides_log_{posture_suffix}.csv")
+    
     if override_log:
-        pd.DataFrame(override_log).to_csv(csv_overrides, index=False, encoding="utf-8-sig")
-        logger.info(f"⚡ Override Log saved: {csv_overrides} ({len(override_log)} triggers)")
+        df_ov = pd.DataFrame(override_log)
+        # Ensure all standard columns exist
+        for col in OVERRIDE_LOG_COLS:
+            if col not in df_ov.columns:
+                df_ov[col] = None
+        # Reorder/Filter columns
+        # (We allow extra columns if they exist in log, or strictly filter? 
+        # Instructions say "define a unique list... Ensure df = df.reindex". 
+        # So we should strictly enforce the list or at least ensure these are present at the start)
+        # Let's align with the requested list and keep any extras at the end if we want, 
+        # OR just strictly stick to the list. "Standardize" implies strictly stick to the list usually for CSV stability.
+        # But if we have extra debug info we might want it.
+        # User said: "Defina un listado único... con todas las columnas extendidas... reindex(columns=OVERRIDE_LOG_COLS)"
+        # So I will strict reindex.
+        df_ov = df_ov.reindex(columns=OVERRIDE_LOG_COLS)
     else:
-        # Create empty with headers
-        with open(csv_overrides, "w", encoding="utf-8") as f:
-            f.write("loan_id,level,from_action,to_action,portfolio_context\n")
-        logger.info(f"⚡ Override Log saved (empty): {csv_overrides}")
+        df_ov = pd.DataFrame(columns=OVERRIDE_LOG_COLS)
+        
+    df_ov.to_csv(csv_overrides, index=False, encoding="utf-8-sig")
+    logger.info(f"⚡ Override Log saved: {csv_overrides} ({len(df_ov)} triggers)")
 
     if export_audit_csv:
         csv_final = os.path.join(out_dir_coord, f"decisiones_audit_{posture_suffix}.csv")
         df_final.to_csv(csv_final, index=False, encoding="utf-8-sig")
         logger.info(f"🧾 Audit CSV: {csv_final}")
+        
+        # (The override log is already saved above with correct schema, no need to overwrite with potentially incorrect schema)
 
-        # Guardar log de overrides si existe
-        if override_log:
-            csv_overrides = os.path.join(out_dir_coord, f"overrides_log_{posture_suffix}.csv")
-            pd.DataFrame(override_log).to_csv(csv_overrides, index=False, encoding="utf-8-sig")
-            logger.info(f"⚡ Override Log saved: {csv_overrides}")
 
     # Logging convergencia
     try:
