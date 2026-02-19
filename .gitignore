@@ -65,4 +65,7 @@ data/*.xlsx
 !reports/summary/summary_consolidated.csv
 !reports/summary/summary_consolidated.json
 
+# =========================
+# Editor settings
+# =========================
 .vscode/
