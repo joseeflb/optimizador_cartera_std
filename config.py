@@ -41,8 +41,17 @@ GR_DSCR_MIN: float = 1.10         # Debt Service Coverage Ratio mínimo (1.10x)
 GR_SELL_MIN_BID_PCT_EAD: float = 0.05                 # Oferta mínima (5% EAD) para siquiera considerar
 GR_SELL_MAX_FIRE_SALE_LOSS_PCT_EAD_PRUDENCIAL: float = 0.40  # Pérdida máxima tolerada en venta (vs EAD) si postura es PRUDENCIAL
 GR_SELL_MIN_CAPITAL_RELEASE: float = 0.0              # Liberación de capital neta mínima (absoluta)
+# ================================================================#  COORDINATION (Micro vs Macro)
 # ================================================================
-# �🔢 Semillas
+# Reglas de prioridad para resolver conflictos entre
+# recomendación técnica (Micro) y asignación estratégica (Macro).
+# Modos soportados:
+#   "PRUDENCIAL_FIRST" -> Si hay conflicto, gana la opción de menor riesgo (MANTENER < REESTRUCTURAR < VENDER)
+#   "MACRO_FIRST"      -> La asignación macro (top-down) impone su cuota, salvo guardrails duros.
+#   "MICRO_FIRST"      -> La recomendación técnica (bottom-up) prevalece, macro solo sugiere.
+COORDINATOR_PRIORITY: str = "PRUDENCIAL_FIRST"
+
+# ================================================================# �🔢 Semillas
 # ================================================================
 GLOBAL_SEED: int = 42
 

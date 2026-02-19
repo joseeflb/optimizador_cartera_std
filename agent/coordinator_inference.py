@@ -852,6 +852,89 @@ def _build_macro_actions_per_loan(df_steps: pd.DataFrame) -> Dict[str, Dict[str,
 
     return macro_info
 
+# ===========================================================
+# 2.5) KPI PORTFOLIO (Helper Task 4 - Robust)
+# ===========================================================
+def compute_portfolio_kpis(df: pd.DataFrame, action_col: str = "Accion_final") -> Dict[str, Any]:
+    """Calcula métricas agregadas del portafolio con búsqueda robusta de columnas."""
+    if df.empty:
+        return {}
+    
+    # 1. Action Column Resolution
+    target_action = "" # default placeholder
+    if action_col in df.columns:
+        target_action = action_col
+    else:
+        # Fallback search
+        for c in ["Accion_micro", "Accion", "action", "Action", "target_action"]:
+            if c in df.columns:
+                target_action = c
+                break
+    
+    # 2. Robust Column Search
+    def _get_col(candidates: List[str]) -> Optional[str]:
+        for c in candidates:
+            if c in df.columns:
+                return c
+        # Case insensitive check
+        cols_lower = {c.lower(): c for c in df.columns}
+        for c in candidates:
+             if c.lower() in cols_lower:
+                 return cols_lower[c.lower()]
+        return None
+
+    col_eva = _get_col(["EVA_post", "EVA", "eva", "EVA_pre", "delta_eva", "EVA_gain"])
+    col_rwa = _get_col(["RWA_post", "RWA", "rwa", "RWA_pre", "RWA_std", "risk_weighted_assets"])
+    col_ead = _get_col(["EAD", "ead", "EAD_pre", "exposure", "exposure_at_default"])
+    col_cap = _get_col(["capital_release_realized", "capital_liberado", "capital_release", "release"])
+
+    # 3. Safe Summation
+    def _sum_safe(col_name: Optional[str]) -> float:
+        if col_name:
+            try:
+                # Force numeric explicitly
+                s = pd.to_numeric(df[col_name], errors='coerce').fillna(0.0)
+                return float(s.sum())
+            except Exception:
+                return 0.0
+        return 0.0
+
+    total_eva = _sum_safe(col_eva)
+    total_rwa = _sum_safe(col_rwa)
+    total_ead = _sum_safe(col_ead)
+    total_cap = _sum_safe(col_cap)
+    
+    # 4. Action Counts
+    if target_action and target_action in df.columns:
+        counts = df[target_action].value_counts().to_dict()
+    else:
+        counts = {"UNKNOWN": len(df)}
+
+    # 5. Concentration (HHI)
+    hhi_score = 0.0
+    col_seg = _get_col(["segment", "segmento", "Segment", "sector"])
+    if col_seg:
+        shares = df[col_seg].value_counts(normalize=True)
+        hhi_score = float((shares ** 2).sum())
+    
+    # Debug info only if needed
+    meta_info = { 
+        "cols_used": {
+            "EVA": col_eva, "RWA": col_rwa, "EAD": col_ead, "Action": target_action
+        }
+    }
+    
+    return {
+        "n_loans": int(len(df)),
+        "total_eva": total_eva,
+        "total_rwa": total_rwa,
+        "total_ead": total_ead,
+        "total_capital_release": total_cap,
+        "action_counts": {str(k): int(v) for k, v in counts.items()},
+        "hhi_concentration": hhi_score,
+        "_meta": meta_info
+    }
+
 
 # ===========================================================
 # 3) COMBINACIÓN MICRO + MACRO
@@ -862,7 +945,7 @@ def _combine_decisions(
     risk_posture: str,
     n_steps: int,
     top_k: int,
-) -> pd.DataFrame:
+) -> Tuple[pd.DataFrame, List[Dict[str, Any]]]:
     df = _ensure_loan_id_column(df_micro).copy()
 
     # Preservar micro
@@ -921,6 +1004,22 @@ def _combine_decisions(
     macro_selected_list: List[bool] = []
     convergencia_list: List[str] = []
 
+    # 🆕 Task 4: Structured Override Log In-Memory
+    override_log_entries: List[Dict[str, Any]] = []
+    override_level_list: List[str] = []
+    override_from_list: List[str] = []
+    override_to_list: List[str] = []
+    
+    # 🆕 Task 2: Propagar “macro flags”
+    macro_rationales_list: List[str] = []
+    macro_steps_sold_list: List[str] = []
+    macro_steps_restructured_list: List[str] = []
+    
+    # 🆕 Task 2 Audit: Explicit Macro Flags
+    macro_action_used_list: List[str] = []
+    macro_conflict_list: List[bool] = []
+    macro_applied_list: List[bool] = []
+
     explanation_micro_list: List[str] = []
     explanation_macro_list: List[str] = []
     explanation_final_list: List[str] = []
@@ -968,6 +1067,9 @@ def _combine_decisions(
         macro_selected = bool(macro_info is not None)
 
         # Macro assignment (solo si tocado)
+        macro_steps_sold = ""
+        macro_steps_restruct = ""
+        
         if not macro_selected:
             macro_assignment = "NO_ASIGNADO"
             macro_action_used = accion_micro  # neutral para no inventar steering
@@ -978,10 +1080,23 @@ def _combine_decisions(
         else:
             macro_assignment = _normalize_action(macro_info.get("macro_action", "")) or "MANTENER"
             macro_action_used = macro_assignment
-            macro_rationale = (
-                " || ".join(macro_info.get("rationales", []) or [])
-                or "Macro selected (no rationale text)."
-            )
+            
+            # Rationales
+            raw_rationales = macro_info.get("rationales", []) or []
+            if raw_rationales:
+                macro_rationale = " || ".join(raw_rationales)
+                if len(macro_rationale) > 500: # Capar longitud
+                    macro_rationale = macro_rationale[:497] + "..."
+            else:
+                macro_rationale = "Macro selected (no rationale text)."
+            
+            # Steps
+            ss = macro_info.get("steps_sold", [])
+            sr = macro_info.get("steps_restructured", [])
+            if ss:
+                macro_steps_sold = ",".join(map(str, ss))
+            if sr:
+                macro_steps_restruct = ",".join(map(str, sr))
 
         # Inputs base
         ead = _safe_float(r.get("EAD", 0.0))
@@ -1149,40 +1264,150 @@ def _combine_decisions(
         constraint_reason = ""
         constraint_metrics_json = ""
 
-        # Arbitraje: micro-led + macro wins salvo guardrails DUROS
+        # -----------------------------------------------------------
+        # COORDINACIÓN MICRO vs MACRO (Prioridad configurable)
+        # -----------------------------------------------------------
+        coord_priority = g.get("COORDINATOR_PRIORITY", "PRUDENCIAL_FIRST")
+        risk_map = {"MANTENER": 0, "REESTRUCTURAR": 1, "VENDER": 2}
+
+        # 1. Punto de partida: Micro (Bottom-Up)
         accion_candidate = accion_micro
         proposed_action = accion_micro
+        
+        override_active = False
+        override_level = ""
+        override_from_val = ""
+        override_to_val = ""
 
         if macro_selected:
             if accion_micro == macro_action_used:
+                # Coinciden: no conflicto
                 accion_candidate = accion_micro
             else:
-                accion_candidate = macro_action_used  # macro gana por defecto
+                # Conflicto: Aplicar regla de desempate
+                apply_macro = False
+                
+                if coord_priority == "MACRO_FIRST":
+                    apply_macro = True
+                
+                elif coord_priority == "MICRO_FIRST":
+                    apply_macro = False
+                
+                elif coord_priority == "PRUDENCIAL_FIRST":
+                    # Gana la opción de MENOR riesgo (MANTENER < REESTRUCTURAR < VENDER)
+                    r_micro = risk_map.get(accion_micro, 0)
+                    r_macro = risk_map.get(macro_action_used, 0)
+                    if r_macro < r_micro:
+                        apply_macro = True
+                        override_level = "MACRO_PRUDENTIAL"
+                    else:
+                        apply_macro = False # Micro es más prudente o igual
+
+                if apply_macro:
+                    accion_candidate = macro_action_used
+                    override_active = True
+                    if not override_level: override_level = "MACRO_STRATEGY"
+                    override_from_val = accion_micro
+                    override_to_val = macro_action_used
+            
             proposed_action = accion_candidate
 
-            # Guardrail DURO 1: en prudencial/balanceado NO se vende en fire-sale
-            if accion_candidate == "VENDER" and fire_sale and rp_l in ("prudencial", "balanceado"):
-                accion_candidate = accion_micro
-                if accion_micro == "VENDER":
-                    accion_candidate = "REESTRUCTURAR" if restruct_feasible else "MANTENER"
+            # ---------------------------------------
+            # Guardrails TÁCTICOS (Conflict resolution safety)
+            # ---------------------------------------
+            # 1. Fire Sale Block (Prudencial/Balanceado): Macro no puede forzar venta si es Fire Sale
+            if accion_candidate == "VENDER" and fire_sale and (rp_l in ("prudencial", "balanceado")):
+                # Revertir a Micro si es más segura, o fallback MANTENER
+                old_cand = accion_candidate
+                accion_candidate = "MANTENER" # Fallback safe
+                
+                # Si micro era REESTRUCTURAR y es viable, usarla
+                if accion_micro == "REESTRUCTURAR" and restruct_feasible:
+                    accion_candidate = "REESTRUCTURAR"
+                
+                if old_cand != accion_candidate:
+                    override_active = True # Trigger override if not already (or modify existing)
+                    override_level = "GUARDRAIL_FIRE_SALE"
+                    override_from_val = old_cand
+                    override_to_val = accion_candidate
 
-            # Guardrail DURO 2: si propone REESTRUCTURAR pero NO es feasible, no lo adoptamos
+            # 2. Feasibility Block: Macro no puede forzar REESTRUCTURAR si no es viable
             if accion_candidate == "REESTRUCTURAR" and not restruct_feasible:
-                accion_candidate = accion_micro
-                if accion_micro == "REESTRUCTURAR":
-                    accion_candidate = "MANTENER"
+                old_cand = accion_candidate
+                accion_candidate = "MANTENER"
+                
+                if old_cand != accion_candidate:
+                    override_active = True
+                    override_level = "GUARDRAIL_FEASIBILITY"
+                    override_from_val = old_cand
+                    override_to_val = accion_candidate
 
-        # RC10: si propones REESTRUCTURAR pero faltan inputs, bloquea a MANTENER
+        # RC10 (Legacy check): Inputs faltantes
         if accion_candidate == "REESTRUCTURAR" and missing_viability_inputs:
-            accion_candidate = "MANTENER"
-
-        # Si queda VENDER en prudencial/balanceado y fire_sale, degradar (última línea)
+             old_cand = accion_candidate
+             accion_candidate = "MANTENER"
+             if old_cand != accion_candidate: # If it changed
+                 override_active = True
+                 override_level = "GUARDRAIL_FEASIBILITY"
+                 override_from_val = old_cand
+                 override_to_val = accion_candidate
+        
+        # Fire Sale Check final (por si acaso quedó VENDER)
         blocked_sell_fire_sale = False
         if (accion_candidate == "VENDER") and (rp_l in ("prudencial", "balanceado")) and fire_sale:
             blocked_sell_fire_sale = True
-            accion_candidate = "REESTRUCTURAR" if (restruct_feasible and (not missing_viability_inputs)) else "MANTENER"
+            old_cand = accion_candidate
+            accion_candidate = "MANTENER"
+            if old_cand != accion_candidate:
+                override_active = True
+                override_level = "GUARDRAIL_FIRE_SALE" 
+                override_from_val = old_cand
+                override_to_val = accion_candidate
 
         accion_final = accion_candidate
+        
+        # Audit Flags
+        macro_conflict = False
+        macro_applied_flag = False
+        
+        if macro_selected:
+            if accion_micro != macro_action_used:
+                macro_conflict = True
+                # Applied if final result matches macro
+                if accion_final == macro_action_used:
+                    macro_applied_flag = True
+
+        # Registrar Override (Audit Grade)
+        if override_active or (override_level and override_level != ""):
+             # Shorten rationales
+             rat_short = macro_rationale if macro_selected else ""
+             if len(rat_short) > 200: 
+                 rat_short = rat_short[:197] + "..."
+                 
+             override_log_entries.append({
+                 "loan_id": loan_id,
+                 "level": override_level,
+                 "from_action": override_from_val,
+                 "to_action": override_to_val,
+                 "portfolio_context": rp_l,
+                 "posture": risk_posture,
+                 "run_id": datetime.now().strftime("%Y%m%d_%H%M%S"), # Timestamp as run_id
+                 "macro_action_used": macro_action_used if macro_selected else "",
+                 "macro_rationales_short": rat_short,
+                 "pti_actual": f"{pti_pre:.2f}" if pti_pre is not None else "",
+                 "dscr_actual": f"{dscr_pre:.2f}" if dscr_pre is not None else "",
+                 "pnl": f"{pnl:.0f}" if np.isfinite(pnl) else "",
+                 # "capital_release_net" # Calculated later or approximate
+             })
+        
+        override_level_list.append(override_level)
+        override_from_list.append(override_from_val)
+        override_to_list.append(override_to_val)
+        
+        # New lists populate
+        macro_action_used_list.append(macro_action_used if macro_selected else "")
+        macro_conflict_list.append(macro_conflict)
+        macro_applied_list.append(macro_applied_flag)
 
         if blocked_sell_fire_sale:
             constraint_blocked = True
@@ -1198,6 +1423,7 @@ def _combine_decisions(
                 separators=(",", ":"),
             )
         elif (not dscr_gate_allowed) and dscr_gate_reason == "DSCR_BELOW_MIN":
+
             if (accion_micro == "REESTRUCTURAR") or (macro_action_used == "REESTRUCTURAR"):
                 constraint_blocked = True
                 constraint_reason = "RESTRUCT_DSCR_BELOW_MIN"
@@ -1272,6 +1498,10 @@ def _combine_decisions(
         explanation_final = f"{rationale_cib} | Governance={governance} | Convergencia={convergencia}"
 
         # Append
+        macro_rationales_list.append(macro_rationale)
+        macro_steps_sold_list.append(macro_steps_sold)
+        macro_steps_restructured_list.append(macro_steps_restruct)
+
         accion_macro_list.append(macro_action_used)
         macro_assignment_list.append(macro_assignment)
         macro_selected_list.append(bool(macro_selected))
@@ -1356,13 +1586,45 @@ def _combine_decisions(
     tasa_nueva_list = _pad_or_trim(tasa_nueva_list, np.nan)
     quita_list = _pad_or_trim(quita_list, np.nan)
 
+    # 🆕 Task 2: Propagar macro columns (listas)
+    macro_rationales_list = _pad_or_trim(macro_rationales_list, "")
+    macro_steps_sold_list = _pad_or_trim(macro_steps_sold_list, "")
+    macro_steps_restructured_list = _pad_or_trim(macro_steps_restructured_list, "")
+    
+    # 🆕 Task 2 Audit: Explicit Macro Flags
+    macro_action_used_list = _pad_or_trim(macro_action_used_list, "")
+    macro_conflict_list = _pad_or_trim(macro_conflict_list, False)
+    macro_applied_list = _pad_or_trim(macro_applied_list, False)
+
     # Columnas finales
     df["Accion_macro"] = accion_macro_list
     df["Macro_Assignment"] = macro_assignment_list  # <- lo que “asignó” macro, solo si tocó
     df["Macro_Selected"] = macro_selected_list
     df["Convergencia_Caso"] = convergencia_list
+    
+    # 🆕 Task 2 Audit: Persistir en DF con naming consistente
+    df["macro_action_used"] = macro_action_used_list
+    df["macro_conflict"] = macro_conflict_list
+    df["macro_applied"] = macro_applied_list
+    df["Macro_Rationales"] = macro_rationales_list  # Standard naming requested
+    
+    # 🆕 Task 2: Persistir en DF legacy columns kept for backward compatibility if needed
+    df["Macro_Rationales"] = macro_rationales_list
+    df["Macro_Steps_Sold"] = macro_steps_sold_list
+    df["Macro_Steps_Restruct"] = macro_steps_restructured_list
 
     df["Accion_final"] = accion_final_list
+    
+    # 🆕 Task 1: Boolean Columns + Defaults (para no tener NaNs)
+    df["override_applied"] = [bool(lvl != "") for lvl in override_level_list]
+    df["override_level"] = override_level_list
+    df["override_from"] = override_from_list
+    df["override_to"] = override_to_list
+    # Fill defaults en caso de inconsistencia
+    df["override_level"] = df["override_level"].fillna("")
+    df["override_from"] = df["override_from"].fillna("")
+    df["override_to"] = df["override_to"].fillna("")
+
     df["Accion"] = df["Accion_final"]  # legacy
     # ---- Canonical mirror (audit/KPIs): decision_final SIEMPRE = Accion_final
     df["decision_final"] = df["Accion_final"]
@@ -1372,6 +1634,7 @@ def _combine_decisions(
         if c in df.columns:
             df[c] = df["Accion_final"]
 
+    # Rename internal legacy or ensure consistent
     df["Explanation_micro"] = explanation_micro_list
     df["Explanation_macro"] = explanation_macro_list
     df["Explanation_final"] = explanation_final_list
@@ -1379,7 +1642,9 @@ def _combine_decisions(
 
     df["Reason_Code"] = reason_code_list
     df["Rationale_CIB"] = rationale_cib_list
-    df["Macro_Evidence"] = macro_evidence_list
+    # df["Macro_Evidence"] = macro_evidence_list # Use Macro_Rationales instead as primary
+    df["Macro_Evidence"] = df["Macro_Rationales"] # Alias for backward compatibility
+    
     df["Decision_Governance"] = governance_list
 
     df["Fire_Sale"] = fire_sale_list
@@ -1417,8 +1682,10 @@ def _combine_decisions(
     # Reorden visual (enforce_schema reordenará canónicas primero)
     preferred = [
         "loan_id", "segment", "EAD", "RW",
-        "Accion_micro", "Accion_macro", "Macro_Assignment", "Macro_Selected",
-        "Accion_final", "Convergencia_Caso",
+        "Accion_micro", "Accion_final", 
+        "macro_action_used", "macro_conflict", "macro_applied", "Macro_Rationales",
+        "Accion_macro", "Macro_Assignment", "Macro_Selected",
+        "Convergencia_Caso",
         "Reason_Code", "Decision_Governance",
         "Missing_Viability_Inputs", "restruct_viable",
         "constraint_blocked", "constraint_reason", "constraint_metrics_json",
@@ -1563,11 +1830,13 @@ def _combine_decisions(
     df["score_mandate"] = score_mandate.fillna(0)
     
     # TIER 1: Top mandate_tier1_share% (genuinamente obligatorio - worst of worst)
-    n_tier1 = max(1, int(len(df) * mandate_tier1_share))
+    target_k_tier1 = int(len(df) * mandate_tier1_share)
+    n_tier1 = max(1, target_k_tier1) if mandate_tier1_share > 1e-6 else 0
     tier1_threshold = df["score_mandate"].nlargest(n_tier1).min() if n_tier1 > 0 else 999
     
     # TIER 2: Top mandate_share_target% total (incluye TIER1 + capital pressure)
-    n_total = max(1, int(len(df) * mandate_share_target))
+    target_k_total = int(len(df) * mandate_share_target)
+    n_total = max(1, target_k_total) if mandate_share_target > 1e-6 else 0
     tier2_threshold = df["score_mandate"].nlargest(n_total).min() if n_total > 0 else 999
     
     df["sale_mandate_tier"] = "NONE"
@@ -1620,7 +1889,7 @@ def _combine_decisions(
     valor_ref = df["valor_referencia"]
     
     # Gate 1: sale_insulting_flag = precio < sale_floor_ratio * valor_referencia
-    df["sale_insulting_flag"] = (sale_price < sale_floor_ratio * valor_ref) | sale_price.isna()
+    df["sale_insulting_flag"] = (sale_price < sale_floor_ratio * valor_ref) | pd.isna(sale_price)
     
     # Gate 2: loss actual = (EAD - sale_price) / EAD
     sale_loss_pct = (ead_val - sale_price) / ead_val.replace(0, np.nan)
@@ -1706,10 +1975,16 @@ def _combine_decisions(
     score -= (tasa_val - 0.05) / 0.05 * 10  # tasa 10% → -10
     
     # Bonificación DSCR: +20 si DSCR>1.5, +10 si DSCR=1.2, 0 si DSCR=1.0
-    score += ((dscr_post.fillna(1.0) - 1.0) / 0.5 * 20).clip(0, 25)
-    
+    if isinstance(dscr_post, pd.Series):
+        score += ((dscr_post.fillna(1.0) - 1.0) / 0.5 * 20).clip(0, 25)
+    else:
+        score += ((dscr_post - 1.0) / 0.5 * 20)
+
     # Bonificación PTI bajo: +15 si PTI<25%, +7.5 si PTI=30%, 0 si PTI>35%
-    score += ((0.35 - pti_post.fillna(0.35)) / 0.10 * 15).clip(0, 20)
+    if isinstance(pti_post, pd.Series):
+        score += ((0.35 - pti_post.fillna(0.35)) / 0.10 * 15).clip(0, 20)
+    else:
+        score += ((0.35 - pti_post) / 0.10 * 15)
     
     df["acceptance_score"] = score.clip(0, 100)
     
@@ -2112,7 +2387,7 @@ def _combine_decisions(
     except Exception as e:
         logger.warning(f"[WARN] Error en post-procesamiento de escalación: {e}")
 
-    return df
+    return df, override_log_entries
 
 
 # ===========================================================
@@ -2186,13 +2461,30 @@ def run_coordinator_inference(
         logger.warning("[WARN] No se ha encontrado modelo MACRO; se usarán solo decisiones micro.")
 
     # 3) COMBINAR
-    df_final = _combine_decisions(
+    df_final, override_log = _combine_decisions(
         df_micro,
         macro_actions,
         risk_posture=risk_posture,
         n_steps=n_steps,
         top_k=top_k,
     )
+
+    # --- KPI Impact Analysis ---
+    logger.info("=== KPI IMPACT ANALYSIS (Micro vs. Coordinated) ===")
+    col_act = "Accion" if "Accion" in df_micro.columns else "action"
+    if col_act in df_micro.columns:
+        logger.info(f"Micro Decisions:\n{df_micro[col_act].value_counts().to_string()}")
+    
+    col_fin = "Accion" if "Accion" in df_final.columns else "action"
+    if col_fin in df_final.columns:
+         logger.info(f"Final Decisions:\n{df_final[col_fin].value_counts().to_string()}")
+    
+    if override_log:
+        df_ov = pd.DataFrame(override_log)
+        if "override_level" in df_ov.columns:
+            logger.info(f"Overrides by Level:\n{df_ov['override_level'].value_counts().to_string()}")
+    # ---------------------------
+
     df_final = _ensure_loan_id_column(df_final)
     df_final = _fill_from_portfolio(df_final, df_port)
 
@@ -2208,14 +2500,61 @@ def run_coordinator_inference(
     else:
         out_dir_coord = os.path.join(REPORTS_DIR, f"coordinated_inference_{tag}_{ts}_{posture_suffix}")
     os.makedirs(out_dir_coord, exist_ok=True)
+    
+    # 🆕 Task 4: KPI Portfolio Before/After (Audit Grade)
+    try:
+        kpis_before = compute_portfolio_kpis(df_micro)
+        kpis_after = compute_portfolio_kpis(df_final, action_col="Accion_final")
+        
+        portfolio_stats = {
+            "timestamp": ts,
+            "posture": risk_posture,
+            "n_loans": kpis_after.get("n_loans", 0),
+            "before": kpis_before,
+            "after": kpis_after,
+            "delta": {
+                "total_eva": kpis_after.get("total_eva", 0.0) - kpis_before.get("total_eva", 0.0),
+                "total_rwa": kpis_after.get("total_rwa", 0.0) - kpis_before.get("total_rwa", 0.0),
+                "total_capital_release": kpis_after.get("total_capital_release", 0.0) - kpis_before.get("total_capital_release", 0.0)
+            },
+            # Common aliases for summary scripts
+            "n_loans": kpis_after.get("n_loans", 0),
+            "total_eva": kpis_after.get("total_eva", 0.0),
+            "total_rwa": kpis_after.get("total_rwa", 0.0),
+            "action_counts": kpis_after.get("action_counts", {})
+        }
+        
+        kpi_json = os.path.join(out_dir_coord, f"portfolio_kpis_{posture_suffix}.json")
+        with open(kpi_json, "w", encoding="utf-8") as f:
+            json.dump(portfolio_stats, f, indent=2)
+        logger.info(f"📊 Portfolio KPIs saved: {kpi_json}")
+    except Exception as e:
+        logger.warning(f"⚠️ Error computing portfolio KPIs: {e}", exc_info=True)
 
     excel_final = os.path.join(out_dir_coord, f"decisiones_finales_{posture_suffix}.xlsx")
     export_styled_excel(df_final, excel_final)
+    
+    # 🆕 Task 3: Override Log Export (ALWAYS)
+    csv_overrides = os.path.join(out_dir_coord, f"overrides_log_{posture_suffix}.csv")
+    if override_log:
+        pd.DataFrame(override_log).to_csv(csv_overrides, index=False, encoding="utf-8-sig")
+        logger.info(f"⚡ Override Log saved: {csv_overrides} ({len(override_log)} triggers)")
+    else:
+        # Create empty with headers
+        with open(csv_overrides, "w", encoding="utf-8") as f:
+            f.write("loan_id,level,from_action,to_action,portfolio_context\n")
+        logger.info(f"⚡ Override Log saved (empty): {csv_overrides}")
 
     if export_audit_csv:
         csv_final = os.path.join(out_dir_coord, f"decisiones_audit_{posture_suffix}.csv")
         df_final.to_csv(csv_final, index=False, encoding="utf-8-sig")
         logger.info(f"🧾 Audit CSV: {csv_final}")
+
+        # Guardar log de overrides si existe
+        if override_log:
+            csv_overrides = os.path.join(out_dir_coord, f"overrides_log_{posture_suffix}.csv")
+            pd.DataFrame(override_log).to_csv(csv_overrides, index=False, encoding="utf-8-sig")
+            logger.info(f"⚡ Override Log saved: {csv_overrides}")
 
     # Logging convergencia
     try:
