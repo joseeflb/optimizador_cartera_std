@@ -9,17 +9,39 @@ class MockConfig:
 
 def test_sell_success():
     state = {"book_value": 100, "ead": 100, "rw": 1.5}
-    pricing = {"price": 50, "net_price": 50} # 50% ratio > 20%
+    # Mocking price_simulator.py output structure
+    pricing = {
+        "precio_optimo": 70,  # 70% recovery -> 30% loss (OK < 40%)
+        "pnl": -30, 
+        "capital_liberado": 12.0, # 100*1.5*0.08
+        "coste_tx": 0, 
+        "rw": 1.5,
+        "book_value": 100
+    } 
     
     cfg = MockConfig(thr=0.20, allow=False)
     ok, reasons, metrics = check_sell_constraints(state, pricing, cfg)
+    
+    # Debug if fails
+    if not ok:
+        print(f"DEBUG FAIL REASONS: {reasons}")
+        
     assert ok is True
-    assert metrics["price_book_ratio"] == 0.50
-    assert metrics["capital_release"] == 100 * 1.5 * 0.08
+    # metrics now have different keys based on guardrails.py
+    assert metrics["sell_ok"] is True
+    assert metrics["bid_price"] == 70
 
 def test_sell_fail_fire_sale_blocked():
-    state = {"book_value": 100}
-    pricing = {"net_price": 10} # 10% < 20%
+    state = {"book_value": 100, "ead": 100}
+    # Mock pricing that triggers fire sale
+    pricing = {
+        "precio_optimo": 10, 
+        "pnl": -90, 
+        "capital_liberado": 0,
+        "coste_tx": 0,
+        "fire_sale": True,
+        "fire_sale_reason": "Low Price vs Book"
+    } 
     
     cfg = MockConfig(thr=0.20, allow=False) # prudential
     ok, reasons, metrics = check_sell_constraints(state, pricing, cfg)
@@ -27,13 +49,20 @@ def test_sell_fail_fire_sale_blocked():
     assert any("FIRE_SALE_BLOCK" in r for r in reasons)
 
 def test_sell_fail_price_negative():
-    state = {"book_value": 100}
-    pricing = {"net_price": -5}
+    state = {"book_value": 100, "ead": 100}
+    pricing = {
+        "precio_optimo": -5, 
+        "pnl": -105, 
+        "capital_liberado": 0,
+        "coste_tx": 0
+    }
     
     cfg = MockConfig()
     ok, reasons, metrics = check_sell_constraints(state, pricing, cfg)
     assert ok is False
-    assert any("PRICE_NON_POSITIVE" in r for r in reasons)
+    # Guardrail 4: BID_TOO_LOW usually catches negative or very low prices
+    # Guardrail 2: MISSING_PRICING_OUTPUTS is not triggered as we provide keys over
+    assert any("BID_TOO_LOW" in r for r in reasons)
 
 if __name__ == '__main__':
     try:

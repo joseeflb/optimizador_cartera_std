@@ -855,7 +855,7 @@ def _build_macro_actions_per_loan(df_steps: pd.DataFrame) -> Dict[str, Dict[str,
 # ===========================================================
 # 2.5) KPI PORTFOLIO (Helper Task 4 - Robust)
 # ===========================================================
-def compute_portfolio_kpis(df: pd.DataFrame, action_col: str = "Accion_final") -> Dict[str, Any]:
+def compute_portfolio_kpis(df: pd.DataFrame, action_col: str = "Accion_final", col_map: Dict[str, str] = None) -> Dict[str, Any]:
     """Calcula métricas agregadas del portafolio con búsqueda robusta de columnas."""
     if df.empty:
         return {}
@@ -873,6 +873,15 @@ def compute_portfolio_kpis(df: pd.DataFrame, action_col: str = "Accion_final") -
     
     # 2. Robust Column Search
     def _get_col(candidates: List[str]) -> Optional[str]:
+        # If we have an explicit mapping, check it first
+        if col_map:
+             # Just map commonly used keys to the forced column
+             # e.g. col_map={"EVA": "EVA_post"}
+             # We check if 'candidates' contains any key from col_map
+             known_keys = ["EVA_post", "EVA", "RWA", "EAD", "capital"] # broad categories
+             # But _get_col is called for specific metrics.
+             pass
+
         for c in candidates:
             if c in df.columns:
                 return c
@@ -883,10 +892,24 @@ def compute_portfolio_kpis(df: pd.DataFrame, action_col: str = "Accion_final") -
                  return cols_lower[c.lower()]
         return None
 
-    col_eva = _get_col(["EVA_post", "EVA", "eva", "EVA_pre", "delta_eva", "EVA_gain"])
-    col_rwa = _get_col(["RWA_post", "RWA", "rwa", "RWA_pre", "RWA_std", "risk_weighted_assets"])
-    col_ead = _get_col(["EAD", "ead", "EAD_pre", "exposure", "exposure_at_default"])
-    col_cap = _get_col(["capital_release_realized", "capital_liberado", "capital_release", "release"])
+    # Helper: resolve column name using map or fallbacks
+    def _resolve(key: str, default_candidates: List[str]) -> Optional[str]:
+        if col_map and key in col_map:
+            # Respect explicit map even if column is missing (it will fail gracefully in _sum_safe or return None)
+            # Actually, check if it exists to be safe, but prioritize map.
+            mapped = col_map[key]
+            if mapped in df.columns:
+                return mapped
+            # If mapped column missing, try fallbacks? Or strict failure?
+            # Let's try fallbacks if mapped is missing, but log it? 
+            # For robust audit, we stick to candidates if mapped fails.
+        
+        return _get_col(default_candidates)
+
+    col_eva = _resolve("EVA", ["EVA_post", "EVA", "eva", "EVA_pre", "delta_eva", "EVA_gain"])
+    col_rwa = _resolve("RWA", ["RWA_post", "RWA", "rwa", "RWA_pre", "RWA_std", "risk_weighted_assets"])
+    col_ead = _resolve("EAD", ["EAD", "ead", "EAD_pre", "exposure", "exposure_at_default"])
+    col_cap = _resolve("CAP", ["capital_release_realized", "capital_liberado", "capital_release", "release"])
 
     # 3. Safe Summation
     def _sum_safe(col_name: Optional[str]) -> float:
@@ -2503,33 +2526,94 @@ def run_coordinator_inference(
     
     # 🆕 Task 4: KPI Portfolio Before/After (Audit Grade)
     try:
-        kpis_before = compute_portfolio_kpis(df_micro)
-        kpis_after = compute_portfolio_kpis(df_final, action_col="Accion_final")
+        # 🆕 Task 4: Semantic KPI Structure (Safe for PowerBI/Audit)
+        
+        # 1. Pre-State (Baseline / Status Quo)
+        cols_pre = {"EVA": "EVA", "RWA": "RWA", "EAD": "EAD"}
+        if "EVA_pre" in df_micro.columns: cols_pre["EVA"] = "EVA_pre"
+        if "RWA_pre" in df_micro.columns: cols_pre["RWA"] = "RWA_pre"
+        
+        kpis_pre = compute_portfolio_kpis(df_micro, col_map=cols_pre)
+        
+        # 2. Micro Proposal (Pure Micro Model)
+        # Assuming df_micro has 'Accion' or 'action' from the micro model
+        action_col_micro = "Accion" if "Accion" in df_micro.columns else "action"
+        # Often Micro output already has post-action EVA called 'EVA_post' or just 'EVA' 
+        # if the dataframe is the result of applying actions. 
+        # But commonly df_micro returned by _run_micro_inference has the *proposed* action
+        # and potentially updated metrics. 
+        # Let's assume 'EVA_post' exists if actions were simulated, or we rely on the primary 'EVA' column if it was updated.
+        # Ideally, we want the theoretical result of the micro model alone.
+        cols_micro = {"EVA": "EVA_post", "RWA": "RWA_post", "EAD": "EAD"}
+        if "EVA_post" not in df_micro.columns: cols_micro["EVA"] = "EVA" # fallback
+        if "RWA_post" not in df_micro.columns: cols_micro["RWA"] = "RWA" # fallback
+
+        kpis_micro = compute_portfolio_kpis(df_micro, action_col=action_col_micro, col_map=cols_micro)
+
+        # 3. Final State (Coordinated)
+        kpis_final = compute_portfolio_kpis(
+            df_final, 
+            action_col="Accion_final",
+            col_map={"EVA": "EVA_post", "RWA": "RWA_post", "EAD": "EAD"}
+        )
+        
+        # Calculate Delta (Final - Pre)
+        delta_metrics = {
+            "total_eva": kpis_final.get("total_eva", 0.0) - kpis_pre.get("total_eva", 0.0),
+            "total_rwa": kpis_final.get("total_rwa", 0.0) - kpis_pre.get("total_rwa", 0.0),
+            "capital_release": kpis_final.get("total_capital_release", 0.0) # Pre is 0 by definition
+        }
         
         portfolio_stats = {
-            "timestamp": ts,
-            "posture": risk_posture,
-            "n_loans": kpis_after.get("n_loans", 0),
-            "before": kpis_before,
-            "after": kpis_after,
-            "delta": {
-                "total_eva": kpis_after.get("total_eva", 0.0) - kpis_before.get("total_eva", 0.0),
-                "total_rwa": kpis_after.get("total_rwa", 0.0) - kpis_before.get("total_rwa", 0.0),
-                "total_capital_release": kpis_after.get("total_capital_release", 0.0) - kpis_before.get("total_capital_release", 0.0)
+            "metadata": {
+                "timestamp": ts,
+                "posture": risk_posture,
+                "tag": tag,
+                "n_loans": len(df_final)
             },
-            # Common aliases for summary scripts
-            "n_loans": kpis_after.get("n_loans", 0),
-            "total_eva": kpis_after.get("total_eva", 0.0),
-            "total_rwa": kpis_after.get("total_rwa", 0.0),
-            "action_counts": kpis_after.get("action_counts", {})
+            "pre_state": kpis_pre,
+            "micro_proposal": kpis_micro,
+            "final_state": kpis_final,
+            "delta_impact": delta_metrics
         }
         
         kpi_json = os.path.join(out_dir_coord, f"portfolio_kpis_{posture_suffix}.json")
         with open(kpi_json, "w", encoding="utf-8") as f:
             json.dump(portfolio_stats, f, indent=2)
-        logger.info(f"📊 Portfolio KPIs saved: {kpi_json}")
+        logger.info(f"📊 Portfolio KPIs saved (Semantic Format): {kpi_json}")
     except Exception as e:
         logger.warning(f"⚠️ Error computing portfolio KPIs: {e}", exc_info=True)
+
+    # 🆕 Task 1 & 3: Sanitize Audit Columns & Standardize IDs
+    if "run_id" not in df_final.columns:
+        df_final["run_id"] = f"{tag}_{ts}"
+    
+    # Audit column sanitization (No NaNs)
+    audit_fill_map = {
+        "override_applied": False,
+        "macro_selected": False,
+        "override_from": "NONE",
+        "override_to": "NONE",
+        "override_level": "NONE",
+        "macro_action": "NONE",
+        "Convergencia_Caso": "MICRO_DEFAULT",
+    }
+    for col, fill_val in audit_fill_map.items():
+        if col not in df_final.columns:
+            # Create column if missing
+            df_final[col] = fill_val
+        else:
+            # Fill existing NaNs/Nones/Empty strings
+            # Use inference to ensure object types are handled correctly
+            series = df_final[col].fillna(fill_val)
+            # Also catch empty strings if they exist
+            if pd.api.types.is_object_dtype(series):
+                 series = series.replace(r'^\s*$', fill_val, regex=True)
+            df_final[col] = series
+            
+    # Ensure macro_action_used is populated for traceability
+    if "macro_action" in df_final.columns and "macro_action_used" not in df_final.columns:
+        df_final["macro_action_used"] = df_final["macro_action"]
 
     excel_final = os.path.join(out_dir_coord, f"decisiones_finales_{posture_suffix}.xlsx")
     export_styled_excel(df_final, excel_final)
