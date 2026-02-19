@@ -148,10 +148,122 @@ def _maybe_run_micro_vn_smoke() -> Optional[str]:
     return None
 
 
+def test_manual_vn_mismatch() -> None:
+    print("\n--- TEST: VecNormalize Mismatch (Force Failure) ---")
+    try:
+        from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+        from gymnasium import spaces
+    except ImportError:
+        print("[SKIP] SB3 not installed.")
+        return
+
+    # 1. Path to the COPY we made
+    bad_pkl = os.path.join("models", "vecnormalize_loan_test_bad.pkl")
+    if not os.path.exists(bad_pkl):
+        print(f"[SKIP] {bad_pkl} not found (did you run copy?). using temp.")
+        return
+
+    # 2. Create an environment with MISMATCHING shape (e.g. 11 instead of 10)
+    class BadShapeEnv(LoanEnv):
+        def __init__(self):
+            super().__init__()
+            # Force 11 dims
+            self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(11,), dtype=np.float32)
+
+    # 3. Try to load. SB3 should raise AssertionError "spaces must have the same shape"
+    #    OR our code (if used via wrapper) catches it.
+    #    Here we call VecNormalize.load DIRECTLY to see the error.
+    dummy_env = DummyVecEnv([lambda: BadShapeEnv()])
+    
+    try:
+        vn = VecNormalize.load(bad_pkl, dummy_env)
+        print("[FAIL] VecNormalize loaded successfully despite mismatch!")
+    except (ValueError, AssertionError) as e:
+        msg = str(e)
+        print(f"[PASS] Caught expected Exception: {msg}")
+        if "spaces must have the same shape" in msg or "shape mismatch" in msg.lower():
+            print("[OK] Error message confirms shape mismatch.")
+        else:
+            print(f"[WARN] Error message different than expected.")
+    except Exception as e:
+        print(f"[WARN] Caught unexpected exception: {type(e).__name__}: {e}")
+
+def test_feature_contract_mismatch() -> None:
+    """Valida feature permutation error con training_metadata_loan.json."""
+    print("\n--- TEST: Feature Contract Mismatch ---")
+    
+    import config as cfg
+    # Asegurar modo estricto
+    old_strict = getattr(cfg, "STRICT_CONTRACT_VALIDATION", True)
+    cfg.STRICT_CONTRACT_VALIDATION = True
+
+    try:
+        from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+        import json
+    except ImportError:
+        return
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # 1. Crear "mock" vn.pkl y training_metadata_loan.json en tmpdir
+        vn_path = os.path.join(tmpdir, "vecnormalize_loan.pkl")
+        meta_path = os.path.join(tmpdir, "training_metadata_loan.json")
+        
+        # Guardar un VN valido (shape 10)
+        dummy_loan = DummyVecEnv([lambda: LoanEnv()])
+        vn = VecNormalize(dummy_loan)
+        vn.save(vn_path)
+        
+        # Guardar metadata con features permutada
+        # LoanEnv tiene "EAD", "PD", ...
+        # Alteramos el orden en el JSON para simular que se entrenó con otro orden.
+        feats = list(LoanEnv.LOAN_OBS_FEATURES)
+        feats.reverse() # Invertir orden
+        
+        meta = {"feature_names": feats, "obs_space_shape": "(10,)"}
+        with open(meta_path, "w") as f:
+            json.dump(meta, f)
+            
+        # 2. Intentar cargar usando _load_vecnormalize_loan (inyectarlo o simularlo)
+        # Como no podemos importar fácil la función privada de policy_inference sin deps,
+        # replicaremos la llamada a _verify_vn_contract si pudiéramos importar, 
+        # pero mejor: importamos el modulo y usamos la funcion publica si existe,
+        # o copiamos la logica de test.
+        
+        # Vamos a importar policy_inference para testear la funcion _verify_vn_contract que acabamos de meter
+        try:
+             # Hack de sys path ya hecho
+             from agent import policy_inference
+             
+             # Mock logger para ver warning si no fuera estricto (pero es estricto)
+             print(f"Testing validation with Strict={cfg.STRICT_CONTRACT_VALIDATION}")
+             
+             try:
+                 policy_inference._verify_vn_contract(vn_path, dummy_loan)
+                 print("[FAIL] Contract verification should have failed!")
+             except ValueError as e:
+                 if "Feature Mismatch" in str(e):
+                     print(f"[PASS] Caught expected mismatch error: {e}")
+                 else:
+                     print(f"[WARN] Caught ValueError but message differs: {e}")
+                     
+        except ImportError:
+             print("[SKIP] agent.policy_inference not importable.")
+        except AttributeError:
+             print("[SKIP] _verify_vn_contract not found (maybe not saved yet?).")
+
+    # Restaurar config
+    cfg.STRICT_CONTRACT_VALIDATION = old_strict
+
+
 def main() -> None:
     test_portfolio_env_actions()
     test_loan_env_obs_shape_and_order()
     test_price_simulator_book_and_override()
+
+    # Manual tests
+    # test_manual_vn_mismatch() # Comentado si no existe el fichero copy
+
+    test_feature_contract_mismatch()
 
     skip_msg = _maybe_run_micro_vn_smoke()
     if skip_msg:

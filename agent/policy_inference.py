@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import os
 import sys
+import json  # ✅ Metadata check
 import time
 import argparse
 import logging
@@ -293,6 +294,61 @@ def _vn_shape_matches_env(vn: VecNormalize, dummy_env: DummyVecEnv) -> bool:
         return True
 
 
+def _verify_vn_contract(vn_path: str, dummy_env: DummyVecEnv) -> None:
+    """Valida metadata (Feature Names) si existe. Fail si mismatch y STRICT=True."""
+    if not vn_path:
+        return
+    
+    # 1) Buscar metadata candidato (asumimos training_metadata_loan.json en mismo dir, o sidecar)
+    parent_dir = os.path.dirname(os.path.abspath(vn_path))
+    cands = [
+        vn_path.replace(os.path.splitext(vn_path)[1], ".json"), # nombre exacto .json
+        os.path.join(parent_dir, "training_metadata_loan.json") # fallback estandar
+    ]
+    meta_path = None
+    for p in cands:
+        if os.path.exists(p):
+            meta_path = p
+            break
+            
+    if not meta_path:
+        return  # No hay contrato -> ignorar validación extra
+    
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        
+        stored_features = meta.get("feature_names", [])
+        if not stored_features:
+            return  # Metadata existe pero sin feature_names (legacy)
+
+        # 2) Sacar features del entorno actual
+        # dummy_env -> VecEnv -> unwrap -> LoanEnv
+        unwrapped = dummy_env.envs[0].unwrapped
+        current_features = getattr(unwrapped, "LOAN_OBS_FEATURES", [])
+        
+        if not current_features:
+            return  # Entorno sin contrato explícito
+
+        # 3) Comparar hashes (más rápido y limpio en log) o listas
+        if stored_features != current_features:
+            msg = (f"[CONTRACT] LOAN Feature Mismatch!\n"
+                   f"   Metadata: {meta_path}\n"
+                   f"   Stored (Training): {stored_features}\n"
+                   f"   Current (Inference): {current_features}")
+            
+            if cfg.STRICT_CONTRACT_VALIDATION:
+                 raise ValueError(msg)
+            else:
+                 logger.warning(f"[WARN] {msg}")
+
+    except Exception as e:
+        # En modo estricto, error de lectura de contrato cuenta como fail
+        if cfg.STRICT_CONTRACT_VALIDATION and isinstance(e, ValueError):
+             raise e
+        logger.warning(f"[WARN] Error verificando contrato VN: {e}")
+
+
 def _load_vecnormalize_loan(vn_path: Optional[str], dummy_env: DummyVecEnv) -> Optional[VecNormalize]:
     if not vn_path:
         return None
@@ -300,6 +356,9 @@ def _load_vecnormalize_loan(vn_path: Optional[str], dummy_env: DummyVecEnv) -> O
         logger.warning(f"[WARN] VecNormalize LOAN no existe: {vn_path}")
         return None
     try:
+        # Validación PREINFERENCIA (Metadata)
+        _verify_vn_contract(vn_path, dummy_env)
+
         vn = VecNormalize.load(vn_path, dummy_env)
         vn.training = False
         vn.norm_reward = False

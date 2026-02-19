@@ -286,6 +286,25 @@ class PortfolioEnv(gym.Env):
     # -----------------------------------------------------------------
     # Config refresh (evita aliases stale)
     # -----------------------------------------------------------------
+    # -----------------------------------------------------------
+    # Properties & Validations
+    # -----------------------------------------------------------
+    @property
+    def PORTFOLIO_OBS_FEATURES(self) -> List[str]:
+        """Genera nombres de features dinámicos segun state_dim."""
+        base = ["total_ead", "total_rwa", "total_eva", "total_risk", "num_loans", "avg_pd", "avg_lgd", "avg_rorwa"]
+        seg_keys = ["SOVEREIGN", "BANK", "CORPORATE", "SME", "RETAIL", "MORTGAGE", "CONSUMER", "LEASING", "OTHER"]
+        rating_keys = ["AAA", "AA", "A", "BBB", "BB", "B", "CCC"]
+        
+        names = base + [f"seg_{k}" for k in seg_keys] + [f"rat_{k}" for k in rating_keys]
+        
+        current_len = len(names)
+        if current_len < self.state_dim:
+            names += [f"pad_{i}" for i in range(current_len, self.state_dim)]
+        else:
+            names = names[:self.state_dim]
+        return names
+
     def _refresh_cfg_aliases(self) -> None:
         CFG = cfg.CONFIG
         self.CFG = CFG

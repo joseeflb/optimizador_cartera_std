@@ -26,7 +26,13 @@ import json, os, sys, random, logging
 from pathlib import Path
 
 # ================================================================
-# 🔢 Semillas
+# � Validación (Modo estricto vs tolerante)
+# ================================================================
+STRICT_CONTRACT_VALIDATION: bool = True  # True (Fail), False (Warn)
+
+
+# ================================================================
+# �🔢 Semillas
 # ================================================================
 GLOBAL_SEED: int = 42
 

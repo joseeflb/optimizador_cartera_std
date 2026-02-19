@@ -620,9 +620,34 @@ def train(cfg_train: TrainConfig) -> str:
         "clip_range": cfg_train.clip_range,
         "learning_rate": cfg_train.learning_rate,
         "max_grad_norm": cfg_train.max_grad_norm,
+    
+    # Feature names (robust introspection)
+    unwrap = vec_env.unwrapped if hasattr(vec_env, "unwrapped") else vec_env
+    feat_names = getattr(unwrap, "LOAN_OBS_FEATURES", [])
+    if not feat_names:
+        feat_names = getattr(unwrap, "PORTFOLIO_OBS_FEATURES", [])
+    
+    metadata = {
+        "pipeline": "PPO-NPL-STD",
+        "env_type": cfg_train.env_type,
+        "env_tag": env_tag,
+        "scenario": cfg_train.scenario,
+        "seed": cfg_train.seed,
+        "timesteps_target": cfg_train.total_timesteps,
+        "n_envs": cfg_train.n_envs,
+        "n_steps": cfg_train.n_steps,
+        "batch_size": cfg_train.batch_size,
+        "gamma": cfg_train.gamma,
+        "gae_lambda": cfg_train.gae_lambda,
+        "ent_coef": cfg_train.ent_coef,
+        "vf_coef": cfg_train.vf_coef,
+        "clip_range": cfg_train.clip_range,
+        "learning_rate": cfg_train.learning_rate,
+        "max_grad_norm": cfg_train.max_grad_norm,
         "policy_hidden": list(cfg_train.policy_hidden),
         "activation_fn": cfg_train.activation_fn,
         "obs_space_shape": obs_shape,
+        "feature_names": feat_names,
         "normalization": {
             "norm_obs": cfg_train.norm_obs,
             "norm_reward_train": norm_reward_train,

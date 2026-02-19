@@ -81,6 +81,11 @@ class LoanEnv(gym.Env):
 
     metadata = {"render_modes": ["human"]}
 
+    # Feature Contract (Orden estricto)
+    LOAN_OBS_FEATURES = [
+        "EAD", "PD", "LGD", "RW", "EVA", "RONA", "RORWA", "rating_num", "segmento_id", "DPD_30"
+    ]
+
     # -----------------------------------------------------------
     # INIT
     # -----------------------------------------------------------

@@ -362,6 +362,61 @@ def _vn_shape_matches_env(vn: VecNormalize, dummy_env: DummyVecEnv) -> bool:
     except Exception:
         return True
 
+def _verify_vn_contract(vn_path: str, dummy_env: DummyVecEnv, label: str) -> None:
+    """Valida metadata (PORTFOLIO_OBS_FEATURES) para env macro."""
+    if not vn_path: return
+    
+    # Solo validar portfolio si label=Portfolio
+    if label.upper() != "PORTFOLIO": return
+    
+    # 1) Buscar metadata
+    parent = os.path.dirname(os.path.abspath(vn_path))
+    # Sidecar .json
+    base_name = os.path.splitext(os.path.basename(vn_path))[0]
+    cands = [
+        os.path.join(parent, f"{base_name}.json"),
+        os.path.join(parent, "training_metadata_portfolio.json")
+    ]
+    
+    meta_path = None
+    for p in cands:
+        if os.path.exists(p):
+            meta_path = p
+            break
+    
+    if not meta_path: return
+
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        
+        stored = meta.get("feature_names", [])
+        if not stored: return
+        
+        # 2) Feature actuales
+        unwrapped = dummy_env.envs[0].unwrapped
+        # property, no constante estática
+        current = getattr(unwrapped, "PORTFOLIO_OBS_FEATURES", [])
+        
+        if not current: return
+        
+        # 3) Check
+        if stored != current:
+            msg = (f"[CONTRACT] PORTFOLIO Feature Mismatch!\n"
+                   f"   Metadata: {meta_path}\n"
+                   f"   Stored: {stored}\n"
+                   f"   Current: {current}")
+            
+            if cfg.STRICT_CONTRACT_VALIDATION:
+                raise ValueError(msg)
+            else:
+                logger.warning(f"[WARN] {msg}")
+
+    except Exception as e:
+        if cfg.STRICT_CONTRACT_VALIDATION and isinstance(e, ValueError):
+             raise e
+        logger.warning(f"[WARN] Contract validation error (portfolio): {e}")
+
 
 def _load_vecnormalize(vn_path: Optional[str], dummy_env: DummyVecEnv, label: str) -> Optional[VecNormalize]:
     if not vn_path:
@@ -375,7 +430,11 @@ def _load_vecnormalize(vn_path: Optional[str], dummy_env: DummyVecEnv, label: st
             f"[WARN] VecNormalize {label} sospechoso por nombre: {vn_path}. "
             f"Se intentará cargar pero se validará shape."
         )
+
     try:
+        # Validación Metadata (Features)
+        _verify_vn_contract(vn_path, dummy_env, label)
+
         vn = VecNormalize.load(vn_path, dummy_env)
         vn.training = False
         vn.norm_reward = False
