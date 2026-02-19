@@ -23,6 +23,7 @@ MEJORAS CLAVE (bank-ready):
 from __future__ import annotations
 
 import os
+import json
 import sys
 import argparse
 import logging
@@ -65,6 +66,7 @@ logger = logging.getLogger("coordinator_inference")
 import config as cfg
 from agent.policy_inference import InferenceConfig, run_inference
 from agent.policy_inference_portfolio import PortfolioInferenceConfig, run_portfolio_inference
+from risk.gates import check_restruct_viability, check_sell_fire_sale
 
 # --- Schema enforcement (columnas estables bank-ready) ---
 try:
@@ -941,6 +943,10 @@ def _combine_decisions(
     price_ratio_book_list: List[float] = []
     fire_sale_threshold_book_list: List[float] = []
 
+    constraint_blocked_list: List[bool] = []
+    constraint_reason_list: List[str] = []
+    constraint_metrics_json_list: List[str] = []
+
     missing_viability_list: List[bool] = []
     restruct_viable_list: List[bool] = []  # útil para hard-guardrails posteriores
 
@@ -1011,11 +1017,26 @@ def _combine_decisions(
         pti_max = g.get("PTI_MAX", None)
         restruct_feasible = True
 
-        if dscr is not None and not (isinstance(dscr, float) and np.isnan(dscr)):
-            try:
-                restruct_feasible &= (float(dscr) >= dscr_min)
-            except Exception:
-                pass
+        dscr_gate_allowed = True
+        dscr_post_gate = dscr
+        dscr_gate_reason = ""
+        gate_income = r.get("monthly_cfo", r.get("cashflow_operativo_mensual", None))
+        gate_payment = r.get("cuota_mensual_post", r.get("monthly_payment", r.get("cuota_mensual", None)))
+        if gate_income is None or gate_payment is None:
+            if dscr is not None and not (isinstance(dscr, float) and np.isnan(dscr)):
+                gate_income = dscr
+                gate_payment = 1.0
+
+        if gate_income is not None and gate_payment is not None:
+            dscr_gate_allowed, dscr_post_gate, dscr_gate_reason = check_restruct_viability(
+                current_income=gate_income,
+                new_payment=gate_payment,
+                dscr_min=dscr_min,
+            )
+            if np.isfinite(dscr_post_gate):
+                dscr = dscr_post_gate
+            if not dscr_gate_allowed:
+                restruct_feasible &= False
 
         if pti_max is not None and pti is not None and not (isinstance(pti, float) and np.isnan(pti)):
             try:
@@ -1083,6 +1104,7 @@ def _combine_decisions(
 
         fire_sale_sim = _safe_bool_cell(r.get("fire_sale", r.get("Fire_Sale", False)))
 
+        allow_fire_sale = (rp_l == "desinversion")
         fire_sale_enabled = (rp_l in ("prudencial", "balanceado"))
         fire_sale_triggered = False
         triggers: List[str] = []
@@ -1092,8 +1114,16 @@ def _combine_decisions(
                 fire_sale_triggered = True
                 triggers.append("SIM_FLAG")
 
-            if np.isfinite(thr_book) and np.isfinite(ratio_book):
-                if ratio_book < float(thr_book):
+            if np.isfinite(thr_book) and np.isfinite(price) and np.isfinite(book_value) and book_value > 0:
+                _, ratio_gate, fire_sale_gate, _ = check_sell_fire_sale(
+                    price_neto=price,
+                    book_value=book_value,
+                    allow_fire_sale=allow_fire_sale,
+                    thr_book=float(thr_book),
+                )
+                if np.isfinite(ratio_gate):
+                    ratio_book = float(ratio_gate)
+                if fire_sale_gate:
                     fire_sale_triggered = True
                     triggers.append("PX_BOOK")
             else:
@@ -1113,6 +1143,10 @@ def _combine_decisions(
 
         fire_sale = bool(fire_sale_triggered)
         price_to_ead = (price / ead) if (ead > 0 and not np.isnan(price)) else np.nan
+
+        constraint_blocked = False
+        constraint_reason = ""
+        constraint_metrics_json = ""
 
         # Arbitraje: micro-led + macro wins salvo guardrails DUROS
         accion_candidate = accion_micro
@@ -1148,6 +1182,38 @@ def _combine_decisions(
             accion_candidate = "REESTRUCTURAR" if (restruct_feasible and (not missing_viability_inputs)) else "MANTENER"
 
         accion_final = accion_candidate
+
+        if blocked_sell_fire_sale:
+            constraint_blocked = True
+            constraint_reason = "SELL_FIRE_SALE_BLOCKED"
+            constraint_metrics_json = json.dumps(
+                {
+                    "price_neto": float(price) if np.isfinite(price) else None,
+                    "book_value": float(book_value) if np.isfinite(book_value) else None,
+                    "price_book_ratio": float(ratio_book) if np.isfinite(ratio_book) else None,
+                    "thr_book": float(thr_book) if np.isfinite(thr_book) else None,
+                    "allow_fire_sale": bool(allow_fire_sale),
+                },
+                separators=(",", ":"),
+            )
+        elif (not dscr_gate_allowed) and dscr_gate_reason == "DSCR_BELOW_MIN":
+            if (accion_micro == "REESTRUCTURAR") or (macro_action_used == "REESTRUCTURAR"):
+                constraint_blocked = True
+                constraint_reason = "RESTRUCT_DSCR_BELOW_MIN"
+                constraint_metrics_json = json.dumps(
+                    {
+                        "dscr_post": float(dscr_post_gate) if np.isfinite(dscr_post_gate) else None,
+                        "dscr_min": float(dscr_min),
+                        "new_payment": float(gate_payment) if gate_payment is not None else None,
+                        "current_income": float(gate_income) if gate_income is not None else None,
+                    },
+                    separators=(",", ":"),
+                )
+
+        if constraint_blocked:
+            logger.info(
+                f"[CONSTRAINT] loan_id={loan_id} reason={constraint_reason} metrics={constraint_metrics_json}"
+            )
 
         flags = {
             "restruct_feasible": restruct_feasible,
@@ -1239,6 +1305,10 @@ def _combine_decisions(
         missing_viability_list.append(bool(missing_viability_inputs))
         restruct_viable_list.append(bool(restruct_feasible))
 
+        constraint_blocked_list.append(bool(constraint_blocked))
+        constraint_reason_list.append(str(constraint_reason))
+        constraint_metrics_json_list.append(str(constraint_metrics_json))
+
         # ✅ BANK-READY: Parámetros de reestructura (desde micro)
         plazo_optimo_list.append(_safe_float(r.get("plazo_optimo", np.nan), np.nan))
         tasa_nueva_list.append(_safe_float(r.get("tasa_nueva", np.nan), np.nan))
@@ -1275,6 +1345,10 @@ def _combine_decisions(
     fire_sale_triggers_list = _pad_or_trim(fire_sale_triggers_list, "")
     missing_viability_list = _pad_or_trim(missing_viability_list, False)
     restruct_viable_list = _pad_or_trim(restruct_viable_list, False)
+
+    constraint_blocked_list = _pad_or_trim(constraint_blocked_list, False)
+    constraint_reason_list = _pad_or_trim(constraint_reason_list, "")
+    constraint_metrics_json_list = _pad_or_trim(constraint_metrics_json_list, "")
 
     # ✅ BANK-READY: Saneo parámetros de reestructura
     plazo_optimo_list = _pad_or_trim(plazo_optimo_list, np.nan)
@@ -1322,6 +1396,10 @@ def _combine_decisions(
     df["Missing_Viability_Inputs"] = missing_viability_list
     df["restruct_viable"] = restruct_viable_list  # para hard guardrails y auditoría
 
+    df["constraint_blocked"] = constraint_blocked_list
+    df["constraint_reason"] = constraint_reason_list
+    df["constraint_metrics_json"] = constraint_metrics_json_list
+
     # ✅ BANK-READY: Parámetros de reestructura
     df["plazo_optimo"] = plazo_optimo_list
     df["tasa_nueva"] = tasa_nueva_list
@@ -1342,6 +1420,7 @@ def _combine_decisions(
         "Accion_final", "Convergencia_Caso",
         "Reason_Code", "Decision_Governance",
         "Missing_Viability_Inputs", "restruct_viable",
+        "constraint_blocked", "constraint_reason", "constraint_metrics_json",
         "plazo_optimo", "tasa_nueva", "quita",  # parámetros de reestructura
         "PTI_pre", "PTI_post", "DSCR_pre", "DSCR_post",
         "case_status", "next_step", "next_step_reason", "review_due_days",

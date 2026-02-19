@@ -603,24 +603,6 @@ def train(cfg_train: TrainConfig) -> str:
     except Exception:
         obs_shape = "unknown"
 
-    metadata = {
-        "pipeline": "PPO-NPL-STD",
-        "env_type": cfg_train.env_type,
-        "env_tag": env_tag,
-        "scenario": cfg_train.scenario,
-        "seed": cfg_train.seed,
-        "timesteps_target": cfg_train.total_timesteps,
-        "n_envs": cfg_train.n_envs,
-        "n_steps": cfg_train.n_steps,
-        "batch_size": cfg_train.batch_size,
-        "gamma": cfg_train.gamma,
-        "gae_lambda": cfg_train.gae_lambda,
-        "ent_coef": cfg_train.ent_coef,
-        "vf_coef": cfg_train.vf_coef,
-        "clip_range": cfg_train.clip_range,
-        "learning_rate": cfg_train.learning_rate,
-        "max_grad_norm": cfg_train.max_grad_norm,
-    
     # Feature names (robust introspection)
     unwrap = vec_env.unwrapped if hasattr(vec_env, "unwrapped") else vec_env
     feat_names = getattr(unwrap, "LOAN_OBS_FEATURES", [])
@@ -727,6 +709,45 @@ def train(cfg_train: TrainConfig) -> str:
     logger.info(f"[VN] VecNormalize final: {vn_path_final}")
     logger.info(f"[CKPT] Checkpoints: {ckpt_dir}")
     logger.info(f"[META] Metadata: {metadata_path}")
+
+    # ============================================================
+    # 🔐 CONTRACT BLINDADO: Generate .meta.json for VecNormalize
+    # ============================================================
+    
+    # Ruta del contrato canónico: models/obs_feature_order_loan.json
+    obs_order_file = os.path.join(MODELS_DIR, "obs_feature_order_loan.json")
+    
+    obs_sha256 = "UNKNOWN"
+    if os.path.exists(obs_order_file):
+        with open(obs_order_file, "rb") as f:
+            obs_sha256 = hashlib.sha256(f.read()).hexdigest()
+    else:
+        logger.warning(f"[WARN] No existe contrato {obs_order_file}. Se guardará hash vacío.")
+
+    # Detectar dimensiones reales desde el entorno
+    try:
+        obs_dim = 0
+        if vec_env.observation_space and hasattr(vec_env.observation_space, "shape"):
+            obs_dim = int(vec_env.observation_space.shape[0])
+    except Exception:
+        obs_dim = 0
+    
+    meta_content = {
+        "env_tag": str(env_tag),
+        "vn_path": os.path.basename(vn_path_final),
+        "obs_dim": obs_dim,
+        "obs_feature_order_file": "models/obs_feature_order_loan.json",
+        "obs_feature_order_sha256": obs_sha256,
+        "numpy_version": np.__version__,
+        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+    
+    # Nombre del archivo meta: vecnormalize_loan.meta.json
+    meta_filename = vn_path_final.replace(".pkl", ".meta.json")
+    with open(meta_filename, "w", encoding="utf-8") as f:
+        json.dump(meta_content, f, indent=4)
+        
+    logger.info(f"[CONTRACT] Guardado metadata blindada en: {meta_filename}")
 
     return best_model_path
 

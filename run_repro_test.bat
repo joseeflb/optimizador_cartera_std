@@ -7,8 +7,15 @@ REM ============================
 set "ROOT_DIR=%~dp0"
 cd /d "%ROOT_DIR%"
 
-set "PY_EXE=py"
+REM Intentar activar entorno virtual si existe
+if exist "%ROOT_DIR%\.venv\Scripts\activate.bat" (
+    call "%ROOT_DIR%\.venv\Scripts\activate.bat"
+)
+
+set "PY_EXE=python"
 set "PYTHONPATH=%ROOT_DIR%"
+
+python -c "import sys; print('USANDO PYTHON:', sys.executable)"
 
 echo ===============================================
 echo TEST DE REPRODUCIBILIDAD - 3 POSTURAS
@@ -18,88 +25,29 @@ echo.
 REM ============================
 REM Parámetros idénticos a run original
 REM ============================
-set "MODEL_MICRO=%ROOT_DIR%models\best_model_loan.zip"
-set "VN_MICRO=%ROOT_DIR%models\vecnormalize_loan.pkl"
-set "PORTFOLIO=%ROOT_DIR%data\portfolio_synth.xlsx"
-set "N_STEPS=3"
-set "TOP_K=5"
-set "TAG=repro_test"
+REM NOTA: Usamos seeds fijas si el código lo permite, o confiamos en 
+REM la carga determinista de modelos. 
 
-echo Modelo micro: %MODEL_MICRO%
-echo VecNormalize: %VN_MICRO%
-echo Portfolio: %PORTFOLIO%
-echo n-steps: %N_STEPS%
-echo top-k: %TOP_K%
-echo Tag: %TAG%
+echo [1/3] Run A (original) ...
+REM Simulamos generando un tag único
+set "TAG_A=repro_A"
+%PY_EXE% -m agent.coordinator_inference --model-micro models\best_model.zip --portfolio data\portfolio_synth.xlsx --risk-posture balanceado --vn-micro models\vecnormalize_loan.pkl --n-steps 3 --top-k 5 --tag %TAG_A%
+if errorlevel 1 exit /b 1
+
 echo.
+echo [2/3] Run B (repetición) ...
+set "TAG_B=repro_B"
+%PY_EXE% -m agent.coordinator_inference --model-micro models\best_model.zip --portfolio data\portfolio_synth.xlsx --risk-posture balanceado --vn-micro models\vecnormalize_loan.pkl --n-steps 3 --top-k 5 --tag %TAG_B%
+if errorlevel 1 exit /b 1
 
-REM ============================
-REM PRUDENCIAL
-REM ============================
-echo [1/3] Ejecutando PRUDENCIAL...
-"%PY_EXE%" -m agent.coordinator_inference ^
-  --model-micro "%MODEL_MICRO%" ^
-  --portfolio "%PORTFOLIO%" ^
-  --risk-posture prudencial ^
-  --vn-micro "%VN_MICRO%" ^
-  --n-steps %N_STEPS% ^
-  --top-k %TOP_K% ^
-  --tag %TAG%_pru
-
-if errorlevel 1 (
-  echo ERROR: PRUDENCIAL fallo
-  pause
-  exit /b 1
-)
-echo OK: PRUDENCIAL completado
 echo.
+echo [3/3] Comparación de resultados ...
+REM Aquí podríamos llamar a un script de diff, 
+REM por ahora visual: revisa si los logs/excels son idénticos.
 
-REM ============================
-REM BALANCEADO
-REM ============================
-echo [2/3] Ejecutando BALANCEADO...
-"%PY_EXE%" -m agent.coordinator_inference ^
-  --model-micro "%MODEL_MICRO%" ^
-  --portfolio "%PORTFOLIO%" ^
-  --risk-posture balanceado ^
-  --vn-micro "%VN_MICRO%" ^
-  --n-steps %N_STEPS% ^
-  --top-k %TOP_K% ^
-  --tag %TAG%_bal
-
-if errorlevel 1 (
-  echo ERROR: BALANCEADO fallo
-  pause
-  exit /b 1
-)
-echo OK: BALANCEADO completado
 echo.
-
-REM ============================
-REM DESINVERSION
-REM ============================
-echo [3/3] Ejecutando DESINVERSION...
-"%PY_EXE%" -m agent.coordinator_inference ^
-  --model-micro "%MODEL_MICRO%" ^
-  --portfolio "%PORTFOLIO%" ^
-  --risk-posture desinversion ^
-  --vn-micro "%VN_MICRO%" ^
-  --n-steps %N_STEPS% ^
-  --top-k %TOP_K% ^
-  --tag %TAG%_des
-
-if errorlevel 1 (
-  echo ERROR: DESINVERSION fallo
-  pause
-  exit /b 1
-)
-echo OK: DESINVERSION completado
-echo.
-
 echo ===============================================
-echo 3 INFERENCIAS COMPLETADAS
-echo Carpetas generadas en reports\
+echo VERIFICAR CARPETAS reports/inference_*_%TAG_A%_* y ...%TAG_B%_*
+echo Deben ser idénticas en decisiones si el modelo es determinista.
 echo ===============================================
-echo.
 pause
-exit /b 0

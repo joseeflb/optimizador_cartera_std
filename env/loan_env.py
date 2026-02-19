@@ -49,6 +49,7 @@ from gymnasium import spaces
 
 import config as cfg
 from optimizer.price_simulator import simulate_npl_price
+from risk.gates import check_restruct_viability
 
 
 # ---------------------------------------------------------------
@@ -578,8 +579,12 @@ class LoanEnv(gym.Env):
                         if pti_c > esfuerzo_max:
                             continue
 
-                        dscr_c = 0.0 if pti_c <= 0 else 1.0 / pti_c
-                        if dscr_c < dscr_min:
+                        allowed_dscr, dscr_c, _ = check_restruct_viability(
+                            current_income=ingreso_mensual,
+                            new_payment=cuota_c,
+                            dscr_min=dscr_min,
+                        )
+                        if not allowed_dscr:
                             continue
 
                         # Cure-aware RW (para evaluar correctamente)

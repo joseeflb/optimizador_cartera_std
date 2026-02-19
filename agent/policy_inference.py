@@ -349,6 +349,54 @@ def _verify_vn_contract(vn_path: str, dummy_env: DummyVecEnv) -> None:
         logger.warning(f"[WARN] Error verificando contrato VN: {e}")
 
 
+def _verify_vn_contract_hard(vn_path: str, dummy_env: DummyVecEnv):
+    """
+    Validación DURA del contrato de normalización usando .meta.json
+    Si falla, bloquea la inferencia.
+    """
+    meta_path = vn_path.replace(".pkl", ".meta.json")
+    if not os.path.exists(meta_path):
+        logger.warning(f"[CONTRACT] No existe metadata {meta_path}. Saltando validación dura.")
+        return
+
+    try:
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        
+        # 1. Validar dimensión observada vs entrenada
+        train_dim = meta.get("obs_dim", -1)
+        current_dim = dummy_env.observation_space.shape[0]
+        
+        if train_dim != -1 and train_dim != current_dim:
+             raise ValueError(f"VecNormalize metadata mismatch: expected obs_dim={train_dim}, got={current_dim}. Regenera modelos.")
+
+        # 2. Validar integridad de features (Hash del contrato)
+        expected_hash = meta.get("obs_feature_order_sha256", "")
+        
+        contract_path = os.path.join(MODELS_DIR, "obs_feature_order_loan.json")
+        current_hash = "MISSING"
+        if os.path.exists(contract_path):
+             import hashlib
+             with open(contract_path, "rb") as f:
+                 current_hash = hashlib.sha256(f.read()).hexdigest()
+        
+        logger.info(f"[DEBUG] Hash Check: expected={expected_hash}, current={current_hash}")
+
+        if expected_hash and expected_hash != "UNKNOWN":
+            if current_hash != expected_hash:
+                 raise ValueError(f"VecNormalize CONTRACT VIOLATION: Hash mismatch.\n"
+                                  f"   Training Hash: {expected_hash}\n"
+                                  f"   Inference Hash: {current_hash}\n"
+                                  f"   Significa que 'models/obs_feature_order_loan.json' cambió tras el entrenamiento.")
+        
+        logger.info(f"[CONTRACT] Validación metadata OK (dim={train_dim}, hash={expected_hash[:8]}...)")
+
+    except ValueError as e:
+        logger.error(f"[CONTRACT] CRITICAL FAIL: {e}")
+        raise e
+    except Exception as e:
+        logger.warning(f"[CONTRACT] Error leyendo metadata: {e}")
+
 def _load_vecnormalize_loan(vn_path: Optional[str], dummy_env: DummyVecEnv) -> Optional[VecNormalize]:
     if not vn_path:
         return None
@@ -356,8 +404,8 @@ def _load_vecnormalize_loan(vn_path: Optional[str], dummy_env: DummyVecEnv) -> O
         logger.warning(f"[WARN] VecNormalize LOAN no existe: {vn_path}")
         return None
     try:
-        # Validación PREINFERENCIA (Metadata)
-        _verify_vn_contract(vn_path, dummy_env)
+        # Validación PREINFERENCIA (Metadata BLINDADA)
+        _verify_vn_contract_hard(vn_path, dummy_env)
 
         vn = VecNormalize.load(vn_path, dummy_env)
         vn.training = False
@@ -373,6 +421,9 @@ def _load_vecnormalize_loan(vn_path: Optional[str], dummy_env: DummyVecEnv) -> O
         logger.info(f"[VN] VecNormalize LOAN cargado: {vn_path}")
         return vn
     except Exception as e:
+        if cfg.STRICT_CONTRACT_VALIDATION:
+             logger.error(f"[CONTRACT] Strict Mode ON. Aborting due to VecNormalize error: {e}")
+             raise e
         logger.warning(f"[WARN] VecNormalize LOAN incompatible: {vn_path} | {e}")
         return None
 
@@ -503,6 +554,25 @@ def load_portfolio_any(path: str) -> pd.DataFrame:
     ext = os.path.splitext(path.lower())[1]
     df = pd.read_excel(path) if ext in (".xlsx", ".xls") else pd.read_csv(path)
     df.columns = [c.strip() for c in df.columns]
+
+    # -----------------------------------------------------------
+    # 🔒 INPUT SCHEMA LOCK (Contract Check)
+    # -----------------------------------------------------------
+    feature_order_path = os.path.join(MODELS_DIR, "feature_order.json")
+    if os.path.exists(feature_order_path):
+        with open(feature_order_path, "r", encoding="utf-8") as f:
+            expected_cols = json.load(f)
+        
+        # Validar SOLO si las columnas están presentes (no importa orden en DF, 
+        # pero sí que estén todas las necesarias para FEATURE ORDER).
+        # Aunque feature_order.json a veces se usa como "features de entrada al modelo", 
+        # en este repo loan_env construye obs, pero validamos integridad básica.
+        
+        missing_cols = [c for c in expected_cols if c not in df.columns]
+        if missing_cols:
+             # Solo warning porque harmonize_portfolio puede arreglar algunas (rate, etc)
+             logger.warning(f"[SCHEMA] Faltan columnas del feature_order.json original: {missing_cols}. Se intentarán derivar.")
+    # -----------------------------------------------------------
 
     df = harmonize_portfolio_schema(df)
 

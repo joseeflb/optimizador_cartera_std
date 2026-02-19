@@ -2,23 +2,29 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 REM ============================================================
-REM ROOT DEL PROYECTO
+REM ROOT DEL PROYECTO & ENTORNO VIRTUAL
 REM ============================================================
 set "ROOT_DIR=%~dp0"
 cd /d "%ROOT_DIR%"
 
-REM ============================================================
-REM PYTHON (launcher genérico)
-REM ============================================================
-set "PY_EXE=py"
+REM Intentar activar entorno virtual si existe
+if exist "%ROOT_DIR%\.venv\Scripts\activate.bat" (
+    call "%ROOT_DIR%\.venv\Scripts\activate.bat"
+)
 
-where py >nul 2>&1
+REM ============================================================
+REM PYTHON (Forzar uso de python del path, que debería ser el del venv)
+REM ============================================================
+set "PY_EXE=python"
+%PY_EXE% --version >nul 2>&1
 if errorlevel 1 (
-  echo ERROR: No se encuentra el launcher de Python (py).
-  echo Por favor instala Python desde python.org
+  echo ERROR: No se encuentra Python.
+  echo Asegurate de activar el entorno virtual o instalar Python.
   pause
   exit /b 1
 )
+
+python -c "import sys; print('USANDO PYTHON:', sys.executable)"
 
 REM ============================================================
 REM PYTHONPATH (imports robustos)
@@ -48,159 +54,85 @@ echo (Generate -> Train -> Infer (3 posturas) -> Summary)
 echo ===============================================================
 echo ROOT:   %ROOT_DIR%
 echo PYTHON: %PY_EXE%
-echo TB:     %TB_LOGDIR%
+
+REM ============================================================
+REM 1. GENERACION DE DATOS (Portfolio + Loans + Market)
+REM ============================================================
 echo.
-
-REM ============================================================
-REM Verifica main.py
-REM ============================================================
-if not exist "%ROOT_DIR%main.py" (
-  echo ERROR: No se encuentra main.py en %ROOT_DIR%
-  pause
-  exit /b 1
-)
-
-REM ============================================================
-REM 1) Verifica dependencias base
-REM ============================================================
-echo Verificando dependencias (numpy, pandas, openpyxl, torch, gymnasium, stable_baselines3)...
-"%PY_EXE%" -c "import numpy,pandas,openpyxl,torch,gymnasium,stable_baselines3; print('OK')"
+echo [1/4] Generando datos sinteticos...
+%PY_EXE% data/generate_portfolio.py
 if errorlevel 1 (
-  echo ERROR: Faltan dependencias en este Python.
-  echo Ejecuta: install_requirements_smart.py con el mismo Python.
-  pause
+  echo ERROR en generate_portfolio.py
   exit /b 1
 )
-echo OK: entorno verificado.
-echo.
 
 REM ============================================================
-REM 2) Generación de cartera
+REM 2. ENTRENAMIENTO (Reinforcement Learning)
 REM ============================================================
-echo [1/4] Generando cartera sintetica (500 prestamos)...
-set "START_TIME=%time%"
-"%PY_EXE%" "%ROOT_DIR%main.py" generate --n 500 --out "%DATA_DIR%\portfolio_synth.xlsx"
+echo.
+echo [2/4] Entrenando Agentes (Micro + Macro)...
+
+REM Entrena micro (loan level) y macro (portfolio level)
+REM Ajusta steps si quieres algo rápido (ej. --total-timesteps 5000)
+%PY_EXE% agent/train_agent.py --total-steps 20000 --portfolio data/portfolio_synth.xlsx
 if errorlevel 1 (
-  echo ERROR: fallo en generate.
-  pause
+  echo ERROR en train_agent.py
   exit /b 1
 )
-echo OK: cartera generada: %DATA_DIR%\portfolio_synth.xlsx
-echo Time: %START_TIME% -> %time%
+
+REM ============================================================
+REM 3. INFERENCIA COORDINADA (3 POSTURAS)
+REM ============================================================
 echo.
+echo [3/4] Ejecutando Inferencia (Coordinador Micro-Macro)...
+echo Se generaran 3 sets de resultados: Prudencial / Balanceado / Desinversion
 
-REM ============================================================
-REM 3) Entrenamiento (micro + macro)
-REM ============================================================
-set "TOTAL_STEPS=500000"
-echo [2/4] Entrenando RL (agent both) total_steps=%TOTAL_STEPS% ...
-set "START_TIME=%time%"
-
-"%PY_EXE%" "%ROOT_DIR%main.py" train --agent both --portfolio "%DATA_DIR%\portfolio_synth.xlsx" --total-steps %TOTAL_STEPS%
+REM --- Postura PRUDENCIAL ---
+echo.
+echo ... Ejecutando Postura PRUDENCIAL ...
+%PY_EXE% -m agent.coordinator_inference --model-micro models\best_model.zip --portfolio data\portfolio_synth.xlsx --risk-posture prudencial --vn-micro models\vecnormalize_loan.pkl --n-steps 5 --top-k 5 --tag run1
 if errorlevel 1 (
-  echo ERROR: fallo en train.
-  pause
+  echo ERROR en inferencia PRUDENCIAL
   exit /b 1
 )
 
-REM ---- Verifica artefactos reales (segun tu pipeline actual)
-set "MODEL_MICRO=%MODELS_DIR%\best_model_loan.zip"
-set "MODEL_MACRO=%MODELS_DIR%\best_model_portfolio.zip"
-set "VN_MICRO=%MODELS_DIR%\vecnormalize_loan.pkl"
-set "VN_MACRO=%MODELS_DIR%\vecnormalize_portfolio.pkl"
-set "VN_LOAN=%MODELS_DIR%\vecnormalize_loan.pkl"
-
-if not exist "%MODEL_MICRO%" (
-  echo ERROR: no se genero %MODEL_MICRO%
-  pause
-  exit /b 1
-)
-if not exist "%MODEL_MACRO%" (
-  echo ERROR: no se genero %MODEL_MACRO%
-  pause
-  exit /b 1
-)
-if not exist "%VN_MICRO%" (
-  echo ERROR: no se genero %VN_MICRO%
-  pause
-  exit /b 1
-)
-if not exist "%VN_MACRO%" (
-  echo ERROR: no se genero %VN_MACRO%
-  pause
-  exit /b 1
-)
-
-echo OK: entrenamiento completado.
-echo Modelos detectados:
-echo   MICRO: %MODEL_MICRO%
-echo   MACRO: %MODEL_MACRO%
-echo   VN_MICRO: %VN_MICRO%
-echo   VN_MACRO: %VN_MACRO%
-echo   VN_LOAN : %VN_LOAN%
-echo Time: %START_TIME% -> %time%
+REM --- Postura BALANCEADO ---
 echo.
-
-REM ============================================================
-REM 4) Inferencia COORDINADA multi-postura (UNA carpeta DELIVERABLE)
-REM ============================================================
-echo [3/4] Inferencia COORDINADA multi-postura (prudencial/balanceado/desinversion)...
-set "START_TIME=%time%"
-
-REM knobs recomendados para smoke; ajusta si quieres
-set "N_STEPS=1"
-set "TOP_K=3"
-set "TAG=deliverable_run"
-
-echo Ejecutando:
-echo   "%PY_EXE%" "%ROOT_DIR%main.py" infer --all-postures --model-micro "%MODEL_MICRO%" --model-macro "%MODEL_MACRO%" --portfolio "%DATA_DIR%\portfolio_synth.xlsx" --tag "%TAG%" --n-steps %N_STEPS% --top-k %TOP_K% --deterministic --vn-micro "%VN_MICRO%" --vn-macro "%VN_MACRO%" --vn-loan "%VN_LOAN%"
-echo.
-
-"%PY_EXE%" "%ROOT_DIR%main.py" infer ^
-  --all-postures ^
-  --model-micro "%MODEL_MICRO%" ^
-  --model-macro "%MODEL_MACRO%" ^
-  --portfolio "%DATA_DIR%\portfolio_synth.xlsx" ^
-  --tag "%TAG%" ^
-  --n-steps %N_STEPS% ^
-  --top-k %TOP_K% ^
-  --deterministic ^
-  --vn-micro "%VN_MICRO%" ^
-  --vn-macro "%VN_MACRO%" ^
-  --vn-loan "%VN_LOAN%"
-
+echo ... Ejecutando Postura BALANCEADO ...
+%PY_EXE% -m agent.coordinator_inference --model-micro models\best_model.zip --portfolio data\portfolio_synth.xlsx --risk-posture balanceado --vn-micro models\vecnormalize_loan.pkl --n-steps 5 --top-k 5 --tag run1
 if errorlevel 1 (
-  echo ERROR: fallo en infer (coordinated).
-  pause
+  echo ERROR en inferencia BALANCEADO
   exit /b 1
 )
 
-echo OK: inferencia completada.
-echo Time: %START_TIME% -> %time%
+REM --- Postura DESINVERSION ---
 echo.
-
-REM ============================================================
-REM 5) Summary (consolidado run-level)
-REM ============================================================
-echo [4/4] Generando resumen ejecutivo (si aplica)...
-"%PY_EXE%" "%ROOT_DIR%main.py" summary
+echo ... Ejecutando Postura DESINVERSION ...
+%PY_EXE% -m agent.coordinator_inference --model-micro models\best_model.zip --portfolio data\portfolio_synth.xlsx --risk-posture desinversion --vn-micro models\vecnormalize_loan.pkl --n-steps 5 --top-k 5 --tag run1
 if errorlevel 1 (
-  echo ERROR: fallo en summary.
-  pause
+  echo ERROR en inferencia DESINVERSION
   exit /b 1
 )
 
+REM ============================================================
+REM 4. GENERACION DE REPORTES FINALES
+REM ============================================================
 echo.
-echo ===============================================================
-echo PIPELINE COMPLETADO OK
-echo Reportes: %REPORTS_DIR%
-echo Deberias ver una carpeta:
-echo   reports\DELIVERABLE_%TAG%_YYYYMMDD_HHMMSS
-echo Con 3 Excels:
-echo   decisiones_finales_prudencial.xlsx
-echo   decisiones_finales_balanceado.xlsx
-echo   decisiones_finales_desinversion.xlsx
-echo ===============================================================
+echo [4/4] Generando reportes y resumenes...
+
+REM Ejecuta el script de reporte resumen
+REM Ajustar paths si los outputs cambian de nombre/fecha
+REM Por defecto coordinator_inference guarda en reports/inference_YYYYMMDD_...
+
+REM (Opcional) Un script que busque el ultimo run y genere un dashboard
+%PY_EXE% reports/results_summary.py
+if errorlevel 1 (
+    echo AVISO: No se pudo generar el resumen global o no existe el script results_summary.py
+)
+
 echo.
+echo ===========================================================
+echo PROCESO FINALIZADO EXITOSAMENTE.
+echo Revisa la carpeta reports/ para ver los resultados.
+echo ===========================================================
 pause
-exit /b 0

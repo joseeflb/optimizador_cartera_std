@@ -30,6 +30,7 @@ Cambios clave v2.2 (consistencia con price_simulator.py y restructure_optimizer.
 from __future__ import annotations
 
 import os
+import json
 import sys
 import time
 import math
@@ -48,6 +49,7 @@ if ROOT_DIR not in sys.path:
 import config as cfg
 from optimizer.price_simulator import simulate_npl_price
 from optimizer.restructure_optimizer import optimize_restructure  # usa gates bankables + hazard forward al horizonte
+from risk.gates import check_restruct_viability, check_sell_fire_sale
 
 
 # -----------------------------
@@ -539,21 +541,28 @@ def micro_decision(row: Dict[str, Any], posture: cfg.BankProfile, horizon_months
     fire_sale = bool(bd_sale.get("fire_sale", False))
     ratio_book = _safe_float(bd_sale.get("price_ratio_book", 0.0))
     thr_book = _safe_float(bd_sale.get("fire_sale_threshold_book", getattr(CFG.precio_venta, "fire_sale_price_ratio_book", 0.85)))
-
     allow_fire_sale = bool(row.get("allow_fire_sale", False))
 
     if posture == cfg.BankProfile.PRUDENTE:
         lambda_cap = 0.6
-        # En prudente: no fire-sale, salvo excepción explícita
-        sale_guardrail_ok = (not fire_sale) or allow_fire_sale
+        thr_book_effective = thr_book
     elif posture == cfg.BankProfile.DESINVERSION:
         lambda_cap = 1.6
-        # En desinversión se permite, pero aun así evitamos casos extremos salvo allow_fire_sale
-        sale_guardrail_ok = (ratio_book >= 0.70) or allow_fire_sale
+        thr_book_effective = max(thr_book, 0.70)
     else:
         lambda_cap = 1.0
-        # Balanceado: no fire-sale salvo allow_fire_sale
-        sale_guardrail_ok = (not fire_sale) or allow_fire_sale
+        thr_book_effective = thr_book
+
+    book_value = _safe_float(bd_sale.get("book_value", row.get("book_value", np.nan)), default=float("nan"))
+    sale_guardrail_ok, ratio_gate, fire_sale_gate, _ = check_sell_fire_sale(
+        price_neto=v_sale,
+        book_value=book_value,
+        allow_fire_sale=allow_fire_sale,
+        thr_book=thr_book_effective,
+    )
+    if np.isfinite(ratio_gate):
+        ratio_book = float(ratio_gate)
+    fire_sale = bool(fire_sale_gate)
 
     # Scores homogéneos en EUR
     total_sell = float(v_sale + lambda_cap * cap_sav)
@@ -564,6 +573,9 @@ def micro_decision(row: Dict[str, Any], posture: cfg.BankProfile, horizon_months
     pti = _safe_float(row.get("PTI", np.nan), default=float("nan"))
     dscr = _safe_float(row.get("DSCR", np.nan), default=float("nan"))
 
+    esfuerzo_bajo = float(getattr(strat, "esfuerzo_bajo", 0.35))
+    dscr_min = float(getattr(strat, "dscr_min", 1.10))
+
     if (not np.isfinite(pti)) or (not np.isfinite(dscr)):
         monthly_payment = _safe_float(row.get("monthly_payment", row.get("cuota_mensual", np.nan)), default=float("nan"))
         monthly_income = _safe_float(row.get("monthly_income", row.get("ingreso_mensual", np.nan)), default=float("nan"))
@@ -572,10 +584,9 @@ def micro_decision(row: Dict[str, Any], posture: cfg.BankProfile, horizon_months
         if np.isfinite(monthly_payment) and monthly_payment > 0 and np.isfinite(monthly_income) and monthly_income > 0:
             pti = monthly_payment / max(1e-9, monthly_income)
         if np.isfinite(monthly_payment) and monthly_payment > 0 and np.isfinite(monthly_cfo) and monthly_cfo > 0:
-            dscr = monthly_cfo / max(1e-9, monthly_payment)
-
-    esfuerzo_bajo = float(getattr(strat, "esfuerzo_bajo", 0.35))
-    dscr_min = float(getattr(strat, "dscr_min", 1.10))
+            _, dscr_calc, _ = check_restruct_viability(monthly_cfo, monthly_payment, dscr_min=dscr_min)
+            if np.isfinite(dscr_calc):
+                dscr = float(dscr_calc)
 
     prefer_restruct = (np.isfinite(pti) and pti > esfuerzo_bajo) or (np.isfinite(dscr) and dscr > 0 and dscr < dscr_min)
 
@@ -599,6 +610,21 @@ def micro_decision(row: Dict[str, Any], posture: cfg.BankProfile, horizon_months
 
     # Auditoría venta vs workout (ratios)
     px_ratio_sale_vs_workout = float(v_sale / max(v_workout, 1e-9))
+
+    constraint_blocked = bool(not sale_guardrail_ok)
+    constraint_reason = "SELL_FIRE_SALE_BLOCKED" if constraint_blocked else ""
+    constraint_metrics_json = ""
+    if constraint_blocked:
+        constraint_metrics_json = json.dumps(
+            {
+                "price_neto": float(v_sale),
+                "book_value": float(book_value) if np.isfinite(book_value) else None,
+                "price_book_ratio": float(ratio_book) if np.isfinite(ratio_book) else None,
+                "thr_book": float(thr_book_effective) if np.isfinite(thr_book_effective) else None,
+                "allow_fire_sale": bool(allow_fire_sale),
+            },
+            separators=(",", ":"),
+        )
 
     return {
         "decision_micro": decision,
@@ -626,8 +652,12 @@ def micro_decision(row: Dict[str, Any], posture: cfg.BankProfile, horizon_months
         "sale_guardrail_ok": int(1 if sale_guardrail_ok else 0),
         "fire_sale": int(1 if fire_sale else 0),
         "price_ratio_book": float(ratio_book),
-        "fire_sale_threshold_book": float(thr_book),
+        "fire_sale_threshold_book": float(thr_book_effective),
         "allow_fire_sale": int(1 if allow_fire_sale else 0),
+
+        "constraint_blocked": bool(constraint_blocked),
+        "constraint_reason": str(constraint_reason),
+        "constraint_metrics_json": str(constraint_metrics_json),
 
         "pti": float(pti) if np.isfinite(pti) else float("nan"),
         "dscr": float(dscr) if np.isfinite(dscr) else float("nan"),

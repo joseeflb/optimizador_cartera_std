@@ -43,6 +43,7 @@ Hardening v3.6.1 (correcciones relevantes):
 
 from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple, Callable
+import json
 
 import os
 import logging
@@ -53,6 +54,7 @@ from gymnasium import spaces
 
 import config as cfg
 from optimizer.price_simulator import simulate_npl_price
+from risk.gates import check_sell_fire_sale
 
 logger = logging.getLogger("portfolio_env")
 
@@ -1280,7 +1282,16 @@ class PortfolioEnv(gym.Env):
         px_book = (precio_optimo / book_value) if book_value > 1e-9 else 0.0
 
         max_loss_eur = -float(max_loss_pct) * float(book_value)
-        is_fire_sale = (px_book < float(min_px_book)) or (pnl <= float(max_loss_eur))
+        thr_book = float(max(float(min_px_book), 1.0 - float(max_loss_pct)))
+        allow_fire_sale_effective = bool(self.allow_fire_sale or self.bank_profile == cfg.BankProfile.DESINVERSION)
+        _, px_book_ratio, is_fire_sale, _ = check_sell_fire_sale(
+            price_neto=precio_optimo,
+            book_value=book_value,
+            allow_fire_sale=allow_fire_sale_effective,
+            thr_book=thr_book,
+        )
+        if np.isfinite(px_book_ratio):
+            px_book = float(px_book_ratio)
 
         # ✅ registrar SIEMPRE fire-sale (se venda o se bloquee)
         loan["Fire_Sale"] = bool(is_fire_sale)
@@ -1296,10 +1307,31 @@ class PortfolioEnv(gym.Env):
             pnl -= abs(eva_pre) * float(penalty_fire)
 
         # Si fire-sale y no permitido en perfiles no-desinversión -> bloquear ejecución
-        if (not self.allow_fire_sale) and is_fire_sale and (self.bank_profile != cfg.BankProfile.DESINVERSION):
+        loan["constraint_blocked"] = False
+        loan["constraint_reason"] = ""
+        loan["constraint_metrics_json"] = ""
+
+        if (not allow_fire_sale_effective) and is_fire_sale and (self.bank_profile != cfg.BankProfile.DESINVERSION):
             loan["sell_blocked"] = True
             loan["sell_block_reason"] = (
-                f"fire_sale(px_book={px_book:.2f} < {min_px_book:.2f} OR pnl={pnl:,.0f} <= {max_loss_eur:,.0f})"
+                f"fire_sale(px_book={px_book:.2f} < {thr_book:.2f})"
+            )
+
+            loan["constraint_blocked"] = True
+            loan["constraint_reason"] = "SELL_FIRE_SALE_BLOCKED"
+            loan["constraint_metrics_json"] = json.dumps(
+                {
+                    "price_neto": float(precio_optimo),
+                    "book_value": float(book_value),
+                    "price_book_ratio": float(px_book),
+                    "thr_book": float(thr_book),
+                    "allow_fire_sale": bool(allow_fire_sale_effective),
+                },
+                separators=(",", ":"),
+            )
+            logger.info(
+                f"[CONSTRAINT] loan_id={loan.get('loan_id', '')} reason=SELL_FIRE_SALE_BLOCKED "
+                f"metrics={loan['constraint_metrics_json']}"
             )
 
             loan["sell_precio_optimo"] = float(precio_optimo)

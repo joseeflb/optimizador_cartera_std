@@ -13,6 +13,7 @@ from typing import Dict, Optional, Tuple, Any, List
 import numpy as np
 
 import config as cfg
+from risk.gates import check_sell_fire_sale
 
 logger = logging.getLogger("price_simulator")
 if not logger.handlers:
@@ -460,7 +461,14 @@ def simulate_npl_price(
         # Default REALISTA si no se inyecta (evita fire-sale “siempre” con 0.85)
         fire_sale_threshold_book = float(getattr(CONFIG, "fire_sale_price_ratio_book", 0.30))
 
-    fire_sale = bool(price_ratio_book < fire_sale_threshold_book)
+    _, ratio_book_gate, fire_sale, fire_sale_reason = check_sell_fire_sale(
+        price_neto=precio_neto,
+        book_value=book_value,
+        allow_fire_sale=True,
+        thr_book=fire_sale_threshold_book,
+    )
+    if np.isfinite(ratio_book_gate):
+        price_ratio_book = float(ratio_book_gate)
 
     fire_sale_triggers: List[str] = []
     if fire_sale:
@@ -508,6 +516,7 @@ def simulate_npl_price(
         "fire_sale": bool(fire_sale),
         "fire_sale_threshold_book": float(fire_sale_threshold_book),
         "fire_sale_triggers": fire_sale_triggers,
+        "fire_sale_reason": str(fire_sale_reason),
 
         "book_value": float(book_value),
         "book_value_source": str(book_source),
