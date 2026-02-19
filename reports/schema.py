@@ -40,6 +40,18 @@ CANON_COLS = [
     "capital_release_cf",
     "capital_release_realized",
     "pnl_realized",
+
+    # Audit Trail (Guardrails & Overrides)
+    "restructure_ok",
+    "sell_ok",
+    "guardrail_reasons",
+    "override_applied",
+    "override_from",
+    "override_to",
+    "audit_pti_check",
+    "audit_dscr_check",
+    "audit_price_book_ratio",
+    "audit_capital_release",
 ]
 
 def _first_existing(df: pd.DataFrame, cols: list[str]) -> str | None:

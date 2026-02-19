@@ -54,7 +54,7 @@
   "micro_vecnorm_path": "",
   "portfolio_input": {
     "path": "data/portfolio_synth.xlsx",
-    "sha256": "f101c5ba3ec52e0d3dc057e929c1a2845052785f6d63b5cd7cc34420a4df1a40",
+    "sha256": "79a07aac4fc3eedd096855a340c93ab411fa90ad197454f585daec0e4f9513ac",
     "n_rows": 500,
     "n_cols": 34
   },
