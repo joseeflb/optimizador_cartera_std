@@ -1960,6 +1960,13 @@ def _combine_decisions(
             
             ok, reasons, metrics = check_restructure_constraints(loan_state, cfg_gr)
             
+            # Persistir metricas de auditoria (siempre, pase o falle)
+            df.at[idx, "restructure_ok"] = ok
+            df.at[idx, "pti_limit"] = metrics.get("pti_max")
+            df.at[idx, "dscr_limit"] = metrics.get("dscr_min")
+            df.at[idx, "pti_headroom"] = metrics.get("pti_headroom")
+            df.at[idx, "dscr_headroom"] = metrics.get("dscr_headroom")
+
             if not ok:
                 n_blocked_restruct += 1
                 df.at[idx, "Accion_final"] = "MANTENER"
@@ -1970,32 +1977,45 @@ def _combine_decisions(
                 df.at[idx, "override_applied"] = True
                 df.at[idx, "override_from"] = "REESTRUCTURAR"
                 df.at[idx, "override_to"] = "MANTENER"
-                df.at[idx, "Reason_Code"] = "RC_GUARDRAIL_RESTRUCT_BLOCK"
+                df.at[idx, "Reason_Code"] = "RC_GUARDRAIL_BLOCK" # Estandarizado
                 
                 current_gov = str(df.at[idx, "Decision_Governance"]) if pd.notna(df.at[idx, "Decision_Governance"]) else ""
                 df.at[idx, "Decision_Governance"] = (current_gov + f"; BLOCK: {reason_str}").strip("; ")
 
-            # Guardar metricas clave para auditoria
-            df.at[idx, "audit_pti_check"] = metrics.get("pti")
-            df.at[idx, "audit_dscr_check"] = metrics.get("dscr")
-
         # 2. VENDER
         elif action == "VENDER":
             loan_state = row.to_dict()
-            # Construir pricing_out desde columnas
+            # Construir pricing_out robusto desde columnas del DF (calculadas previamente)
+            # Intentar varios alias comunes
+            pr_opt = row.get("precio_optimo", row.get("Price", 0.0))
+            pnl_val = row.get("pnl", row.get("PnL", 0.0))
+            cap_rel = row.get("capital_liberado", row.get("capital_release", 0.0))
+            
             pricing_out = {
-                "price": row.get("Price", 0.0),
-                "net_price": row.get("Price_Neto", row.get("Price", 0.0)),
-                "costs": 0.0 # Si hubiera
+                "precio_optimo": pr_opt,
+                "price": row.get("precio_bruto", pr_opt),
+                "pnl": pnl_val,
+                "capital_liberado": cap_rel,
+                "coste_tx": row.get("coste_tx", 0.0),
+                "fire_sale": row.get("fire_sale", False),
+                "fire_sale_reason": row.get("fire_sale_reason", ""),
+                "book_value": row.get("book_value", 0.0),
+                "rw": row.get("RW", 1.5)
             }
             
             ok, reasons, metrics = check_sell_constraints(loan_state, pricing_out, cfg_gr)
             
+            # Persistir metricas audit sell
+            df.at[idx, "sell_ok"] = ok
+            df.at[idx, "capital_release_net"] = metrics.get("capital_release")
+            df.at[idx, "rwa_before"] = metrics.get("rwa_before")
+            df.at[idx, "rwa_after"] = metrics.get("rwa_after")
+            # Reuse audit_price_book_ratio (legacy name)
+            df.at[idx, "audit_price_book_ratio"] = metrics.get("price_book_ratio")
+
             if not ok:
                 n_blocked_sell += 1
-                # Degradar a MANTENER (o reestructurar si fuera viable, pero simplificamos a mantener por seguridad)
-                # Check rapido de viabilidad reesturcturacion para fallback inteligente? 
-                # Por ahora MANTENER para cumplir "degradar a alternativa prudencial"
+                # Degradar a MANTENER 
                 
                 df.at[idx, "Accion_final"] = "MANTENER"
                 _set_action_all(df.index == idx, "MANTENER")
@@ -2005,16 +2025,13 @@ def _combine_decisions(
                 df.at[idx, "override_applied"] = True
                 df.at[idx, "override_from"] = "VENDER"
                 df.at[idx, "override_to"] = "MANTENER"
-                df.at[idx, "Reason_Code"] = "RC_GUARDRAIL_SELL_BLOCK"
+                df.at[idx, "Reason_Code"] = "RC_GUARDRAIL_BLOCK"
                 
                 current_gov = str(df.at[idx, "Decision_Governance"]) if pd.notna(df.at[idx, "Decision_Governance"]) else ""
                 df.at[idx, "Decision_Governance"] = (current_gov + f"; BLOCK: {reason_str}").strip("; ")
-            
-            # Guardar metricas
-            df.at[idx, "audit_price_book_ratio"] = metrics.get("price_book_ratio")
-            df.at[idx, "audit_capital_release"] = metrics.get("capital_release")
 
     logger.info(f"🛡️ Guardrails aplicados: {n_blocked_restruct} reestructuras bloqueadas, {n_blocked_sell} ventas bloqueadas.")
+
 
     # ===========================================================
     # (Removed old HARD GUARDRAILS block)

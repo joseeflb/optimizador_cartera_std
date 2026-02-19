@@ -48,6 +48,15 @@ CANON_COLS = [
     "override_applied",
     "override_from",
     "override_to",
+    
+    # Audit trail (Detalle Guardrails)
+    "pti_limit",
+    "dscr_limit",
+    "pti_headroom",
+    "dscr_headroom",
+    "rwa_before",
+    "rwa_after",
+    "capital_release_net", # para sell guardrail
     "audit_pti_check",
     "audit_dscr_check",
     "audit_price_book_ratio",

@@ -7,16 +7,17 @@ import logging
 from typing import Dict, Any, List, Tuple
 import numpy as np
 from risk.gates import check_restruct_viability, check_sell_fire_sale
+import config as cfg  # Importar config global
 
 logger = logging.getLogger("guardrails")
 
-def check_restructure_constraints(loan_state: Dict[str, Any], cfg: Any = None) -> Tuple[bool, List[str], Dict[str, Any]]:
+def check_restructure_constraints(loan_state: Dict[str, Any], config_obj: Any = None) -> Tuple[bool, List[str], Dict[str, Any]]:
     """
     Valida si una reestructuracion es viable segun politicas de riesgo (PTI, DSCR, mejora EVA).
     
     Args:
         loan_state: Diccionario con estado del prestamo (PTI, DSCR, EVA, etc.)
-        cfg: Objeto de configuracion (opcional) con umbrales.
+        config_obj: Objeto de configuracion (opcional) con umbrales.
     
     Returns:
         (ok, reasons, metrics)
@@ -24,160 +25,163 @@ def check_restructure_constraints(loan_state: Dict[str, Any], cfg: Any = None) -
     reasons = []
     metrics = {}
     
-    # Extraer metricas clave
+    # 1. Recuperar umbrales desde config o fallback seguro
+    # Prioridad: config_obj -> config.py global (GR_*) -> Hard Defaults
+    if config_obj and hasattr(config_obj, "risk_params"):
+         # Si viene un objeto custom (ej. training)
+         rp = config_obj.risk_params
+         pti_max = float(getattr(rp, "pti_limit", getattr(cfg, "GR_PTI_MAX", 0.45)))
+         dscr_min = float(getattr(rp, "dscr_min", getattr(cfg, "GR_DSCR_MIN", 1.10)))
+    else:
+         # Usar globales de config.py
+         pti_max = getattr(cfg, "GR_PTI_MAX", 0.45)
+         dscr_min = getattr(cfg, "GR_DSCR_MIN", 1.10)
+
+    # 2. Extraer metricas del estado
     pti = float(loan_state.get("pti_actual", 0.0) or 0.0)
     dscr = float(loan_state.get("dscr_actual", 0.0) or 0.0)
-    
-    # 1. Validacion de Viabilidad (PTI/DSCR) usando risk.gates
-    # Se pasa un cfg dummy si es necesario o se usan defaults dentro de gates
-    
-    # Recuperar umbrales del cfg si existen
-    risk_params = getattr(cfg, "risk_params", cfg) if cfg else None
-    
-    # Extraer limites con defaults seguros
-    if risk_params:
-         pti_max = float(getattr(risk_params, "pti_limit", 0.45) or 0.45)
-         dscr_min = float(getattr(risk_params, "dscr_min", 1.10) or 1.10)
-    else:
-         pti_max = 0.45
-         dscr_min = 1.10
 
-    metrics["pti"] = pti
-    metrics["dscr"] = dscr
-    metrics["threshold_pti"] = pti_max
-    metrics["threshold_dscr"] = dscr_min
+    # Calculo de headroom (margen de maniobra)
+    pti_headroom = pti_max - pti
+    dscr_headroom = dscr - dscr_min
 
-    # Usar check_restruct_viability de risk.gates
-    # Firma: check_restruct_viability(current_income, new_payment, dscr_min)
-    # Pero aqui tenemos 'pti' y 'dscr' ya calculados en 'loan_state'
-    # Si tenemos income/payment, podriamos recalcular, pero confiamos en lo que venga en loan_state
+    metrics.update({
+        "pti_actual": pti,
+        "dscr_actual": dscr,
+        "pti_max": pti_max,
+        "dscr_min": dscr_min,
+        "pti_headroom": pti_headroom, # Positivo es bueno
+        "dscr_headroom": dscr_headroom, # Positivo es bueno
+        "restructure_ok": True # Provisional, se actualiza si falla
+    })
+
+    # 3. Validaciones
     
-    # Check PTI (manual pues no esta en check_restruct_viability explicito como gate unico)
+    # Check PTI
     if pti > pti_max:
         reasons.append(f"PTI_HIGH ({pti:.2f} > {pti_max:.2f})")
     
-    # Check DSCR (usando helper si queremos o directo)
-    # Si usamos check_restruct_viability necesitamos income y payment
-    income = float(loan_state.get("income", 0.0) or 0.0)
-    payment = float(loan_state.get("payment", 0.0) or 0.0)
-    
-    is_dscr_ok, dscr_val, dscr_reason = check_restruct_viability(income, payment, dscr_min)
-    
-    # Si no hay income/payment, usamos el dscr pre-calculado del state si existe
-    if dscr_reason == "DSCR_INPUT_MISSING":
-         if dscr < dscr_min and dscr > 0:
-              reasons.append(f"DSCR_LOW ({dscr:.2f} < {dscr_min:.2f})")
-         elif dscr <= 0:
-               # Si no hay datos, es blocking bank-ready?
-               # Depende policy. Asumimos que si falta data, no es viable.
-               reasons.append("DSCR_MISSING_DATA")
-    elif not is_dscr_ok:
-         reasons.append(f"{dscr_reason} ({dscr_val:.2f} < {dscr_min:.2f})")
+    # Check DSCR
+    # Nota: check_restruct_viability de risk.gates pide income/payment.
+    # Si tenemos dscr pre-calculado fiable, lo usamos directamenet para consistencia con el modelo.
+    if dscr < dscr_min:
+        # Validar si es 0 (missing data) o bajo real
+        if dscr <= 0.01:
+             reasons.append("DSCR_MISSING/ZERO")
+        else:
+             reasons.append(f"DSCR_LOW ({dscr:.2f} < {dscr_min:.2f})")
 
-    # 2. Check Mejora Economica (EVA / PD / RW)
-    # Esto es mas sutil, requiere comparar PRE vs POST.
-    # Si no tenemos EVA_post, asumimos que el modelo lo predijo positivo, 
-    # pero podemos chequear si 'eva_delta' esta en loan_state o similar.
-    
+    # 4. Check Mejora Economica (EVA / PD / RW)
     eva_pre = float(loan_state.get("eva_pre", 0.0) or 0.0)
-    eva_post = float(loan_state.get("eva_post", 0.0) or 0.0) # Esperado
+    eva_post = float(loan_state.get("eva_post", 0.0) or 0.0)
     
     if "eva_post" in loan_state:
         eva_delta = eva_post - eva_pre
-        min_improvement = 0.0 # Debe mejorar algo
         metrics["eva_delta"] = eva_delta
-        if eva_delta < min_improvement:
-             reasons.append(f"EVA_NO_IMPROVEMENT ({eva_delta:,.0f} < 0)")
+        # No bloqueamos hard si no mejora, a menos que sea politica estricta.
+        # Por ahora solo PTI/DSCR son hard blocks regulatorios/bancarios.
 
     ok = len(reasons) == 0
+    metrics["restructure_ok"] = ok
     return ok, reasons, metrics
 
 
-def check_sell_constraints(loan_state: Dict[str, Any], pricing_out: Dict[str, Any], cfg: Any = None) -> Tuple[bool, List[str], Dict[str, Any]]:
+def check_sell_constraints(loan_state: Dict[str, Any], pricing_out: Dict[str, Any], config_obj: Any = None) -> Tuple[bool, List[str], Dict[str, Any]]:
     """
-    Valida si una venta es ejecutable (No es Fire Sale destructivo, Precio minimo).
-    
-    Args:
-        loan_state: Estado del prestamo (Book, EAD, RW).
-        pricing_out: Output del simulador de precios (Price, Costs, FireSaleMetrics).
-        cfg: Configuracion con umbrales de apetito de riesgo.
-    
-    Returns:
-        (ok, reasons, metrics)
+    Valida si una venta es ejecutable (pricing_out viene de simulate_npl_price).
+    Reglas Bank-Ready:
+      - Oferta minima (% EAD)
+      - Perdida maxima (PnL vs Book o vs EAD)
+      - Liberacion de capital minima
+      - Checks de integridad (missing keys)
     """
     reasons = []
     metrics = {}
     
-    # Extraer datos de precio
-    price = pricing_out.get("price", 0.0)
-    costs = pricing_out.get("costs", 0.0) # Si simulate_npl_price devuelve costes
-    net_price = pricing_out.get("net_price", price) # Asumir neto si no hay explicito
-    if "price_neto" in pricing_out:
-        net_price = pricing_out["price_neto"]
+    # 1. Recuperar Umbrales
+    min_bid_pct_ead = getattr(cfg, "GR_SELL_MIN_BID_PCT_EAD", 0.05)
+    max_loss_pct_ead_pru = getattr(cfg, "GR_SELL_MAX_FIRE_SALE_LOSS_PCT_EAD_PRUDENCIAL", 0.40)
+    min_cap_release = getattr(cfg, "GR_SELL_MIN_CAPITAL_RELEASE", 0.0)
 
-    book_value = float(loan_state.get("book_value", 0.0) or 0.0)
+    # 2. Validar Integridad Pricing
+    required_keys = ["precio_optimo", "pnl", "capital_liberado"]
+    missing = [k for k in required_keys if k not in pricing_out]
+    if missing:
+        return False, [f"MISSING_PRICING_OUTPUTS ({missing})"], {"sell_ok": False}
+
+    # 3. Extraer Metricas
     ead = float(loan_state.get("ead", 0.0) or 0.0)
+    if ead <= 0: ead = float(loan_state.get("EAD", 1.0)) # Fallback seguro
     
-    pnl = net_price - book_value
+    bid_price = float(pricing_out.get("precio_optimo", 0.0))
+    pnl = float(pricing_out.get("pnl", 0.0)) # Net Price - Book Value
+    capital_release = float(pricing_out.get("capital_liberado", 0.0))
+    coste_tx = float(pricing_out.get("coste_tx", 0.0))
     
-    # Calculo de RWA y Capital
-    rw = float(loan_state.get("rw", 1.5)) # Default 150%
-    if rw > 10.0: rw /= 100.0
-    
-    # Capital Release = EAD * RW * 8% (o ratio capital)
-    cap_ratio = 0.08 # Default
-    if cfg and hasattr(cfg, "capital_ratio"):
-        cap_ratio = float(cfg.capital_ratio)
-        
-    rwa_before = ead * rw
-    rwa_after = 0.0 # Venta elimina RWA
-    capital_release = rwa_before * cap_ratio
-    
-    metrics["price"] = price
-    metrics["net_price"] = net_price
-    metrics["costs"] = costs
-    metrics["pnl"] = pnl
-    metrics["capital_release"] = capital_release
-    metrics["rwa_before"] = rwa_before
-    
-    # 1. Validación Fire Sale (Price < Threshold Book)
-    # Reutilizamos la logica de gates o implementamos explicita
-    
-    # Recuperar umbral fire sale
-    fire_sale_thr = 0.20 # Default
-    allow_fs = False     # Default prudencial
-    
-    if cfg:
-         fire_sale_options = getattr(cfg, "fire_sale", {})
-         if isinstance(fire_sale_options, dict):
-             fire_sale_thr = float(fire_sale_options.get("threshold_book", 0.20))
-             allow_fs = bool(fire_sale_options.get("allow_fire_sale", False))
-         elif hasattr(fire_sale_options, "threshold_book"):
-             fire_sale_thr = float(fire_sale_options.threshold_book)
-             allow_fs = getattr(fire_sale_options, "allow_fire_sale", False)
-             
-    # Usar check_sell_fire_sale de risk.gates
-    # Firma: check_sell_fire_sale(price_neto, book_value, allow_fire_sale, thr_book)
-    # Retorna: (allowed, ratio, is_fire_sale, reason)
-    
-    allowed, ratio, is_fs, reason = check_sell_fire_sale(net_price, book_value, allow_fs, fire_sale_thr)
-    metrics["price_book_ratio"] = ratio
-    metrics["fire_sale"] = is_fs
-    
-    if not allowed:
-        reasons.append(f"FIRE_SALE_BLOCK ({reason})")
-    elif is_fs:
-        # Es fire sale pero esta permitido. Lo loguamos.
-        pass
+    # Book value (intentar sacar de pricing_out primero, luego loan_state)
+    book_val = float(pricing_out.get("book_value", 0.0))
+    if book_val <= 0: book_val = float(loan_state.get("book_value", 0.0) or 0.0)
 
-    # 2. Check Precio Absurdo (Guardrail de seguridad)
-    if net_price <= 0:
-         reasons.append("PRICE_NON_POSITIVE")
+    # RWA (si viene de pricing_out, mejor)
+    rw = float(pricing_out.get("rw", 1.5))
+    rwa_before = ead * rw
+    rwa_after = 0.0 # Venta = 0 RWA
+
+    metrics.update({
+        "bid_price": bid_price,
+        "costs": coste_tx,
+        "pnl": pnl,
+        "capital_release": capital_release,
+        "rwa_before": rwa_before,
+        "rwa_after": rwa_after,
+        "sell_ok": True # Default
+    })
     
-    # 3. Check PnL Excesivo (Doble check ademas de fire sale)
-    # Ej: No perder mas del 50% del book value
-    if metrics["price_book_ratio"] < 0.50:
-         reasons.append(f"DEEP_DISCOUNT (Price/Book < 50%)")
+    # 4. Guardrail: Oferta Minima Absurda
+    # Si ofrece menos del X% del EAD, es basura/estafa o error.
+    if bid_price < (ead * min_bid_pct_ead):
+        reasons.append(f"BID_TOO_LOW (<{min_bid_pct_ead*100:.0f}% EAD)")
+
+    # 5. Guardrail: Perdida Excesiva (Prudencial)
+    # Si la perdida supera el X% del EAD, quiza sea "Fire Sale" inaceptable.
+    # Esto depende de si la estrategia permite o no Fire Sale, pero aqui ponemos un "Hard Cap"
+    # de prudencia extrema (ej. no perder el 40% del EAD en una venta).
+    loss_absolute = -pnl if pnl < 0 else 0.0
+    if loss_absolute > (ead * max_loss_pct_ead_pru):
+        # AQUI podriamos flexibilizar si la estrategia es DESINVERSION.
+        # Por ahora lo dejamos como warning o hard block segun apetito.
+        # Vamos a hacerlo HARD BLOCK para postura PRUDENCIAL/BALANCEADO.
+        # TODO: Detectar postura del config_obj si existe
+        reasons.append(f"PNL_TOO_NEGATIVE_PRUDENCIAL (Loss > {max_loss_pct_ead_pru*100:.0f}% EAD)")
+
+    # 6. Guardrail: Capital Release
+    # No vender si no libera capital (ej. RWA ya era 0 o pnl muy negativo come capital)
+    # Nota: capital_release ya deberia ser neto? Normalmente es RWA*8%.
+    # Si el PnL negativo impacta capital CET1, deberiamos considerarlo.
+    # La metrica 'capital_liberado' de price_simulator suele ser bruta RWA*8%.
+    if capital_release < min_cap_release:
+        reasons.append("CAPITAL_RELEASE_TOO_LOW")
+        
+    # 7. Integracion Check Fire Sale (risk.gates)
+    # Si price_simulator ya devolvio fire_sale=True y reason, podemos usarlos.
+    is_fire_sale = pricing_out.get("fire_sale", False)
+    fs_reason = pricing_out.get("fire_sale_reason", "")
+    
+    # Si price_simulator dice que es Fire Sale prohibido (aunque aqui solo nos da el flag)
+    # price_simulator ya hace check de gate internos, pero nos devuelve fire_sale=True si
+    # viola el threshold book.
+    # Si nuestro mandato es "NO FIRE SALES", bloqueamos.
+    # Asumimos que si estamos aqui, queremos validar extra.
+    # Si la config pide 'allow_fire_sale', esto seria OK.
+    # Validemos contra config real si existe.
+    allow_fs = False
+    if config_obj and hasattr(config_obj, "fire_sale"):
+         allow_fs = getattr(config_obj.fire_sale, "allow_fire_sale", False)
+    
+    if is_fire_sale and not allow_fs:
+         reasons.append(f"FIRE_SALE_BLOCK ({fs_reason})")
 
     ok = len(reasons) == 0
+    metrics["sell_ok"] = ok
+    
     return ok, reasons, metrics

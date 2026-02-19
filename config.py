@@ -29,8 +29,18 @@ from pathlib import Path
 # � Validación (Modo estricto vs tolerante)
 # ================================================================
 STRICT_CONTRACT_VALIDATION: bool = True  # True (Fail), False (Warn)
+# ================================================================
+#  GUARDRAILS (Hard Constraints Bank-Ready)
+# ================================================================
+# Umbrales deterministas para reestructuraciones y ventas.
+# Estos valores gobiernan la lógica en optimizer/guardrails.py
+GR_PTI_MAX: float = 0.45          # Payment-to-Income máximo (45%)
+GR_DSCR_MIN: float = 1.10         # Debt Service Coverage Ratio mínimo (1.10x)
 
-
+# Guardrails de Venta (Prudencial)
+GR_SELL_MIN_BID_PCT_EAD: float = 0.05                 # Oferta mínima (5% EAD) para siquiera considerar
+GR_SELL_MAX_FIRE_SALE_LOSS_PCT_EAD_PRUDENCIAL: float = 0.40  # Pérdida máxima tolerada en venta (vs EAD) si postura es PRUDENCIAL
+GR_SELL_MIN_CAPITAL_RELEASE: float = 0.0              # Liberación de capital neta mínima (absoluta)
 # ================================================================
 # �🔢 Semillas
 # ================================================================
