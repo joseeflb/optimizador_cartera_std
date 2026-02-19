@@ -266,7 +266,7 @@ class SensibilidadReestructura:
     horizon_months: int = 24
 
 # ================================================================
-# 🏷️ Precio de venta NPL
+# [NPL] Precio de venta NPL
 # ================================================================
 @dataclass
 class PrecioVentaParams:

@@ -126,7 +126,7 @@ def _load_exporter():
 
         wb.save(out_path)
 
-    logger.warning("⚠️ No se encontró export_styled_excel. Usando fallback OpenPyXL.")
+    logger.warning("[WARN] No se encontró export_styled_excel. Usando fallback OpenPyXL.")
     return _fallback_export
 
 
@@ -212,7 +212,7 @@ def _get_guardrails(risk_posture: str) -> Dict[str, Any]:
         try:
             cfg.set_bank_profile(prof)
         except Exception as e:
-            logger.warning(f"⚠️ No se pudo fijar bank_profile en config: {e}")
+            logger.warning(f"[WARN] No se pudo fijar bank_profile en config: {e}")
 
     try:
         strat = cfg.BANK_STRATEGIES.get(prof)
@@ -238,7 +238,7 @@ def _get_guardrails(risk_posture: str) -> Dict[str, Any]:
                 g["PTI_MAX"] = float(pti_candidate)
 
     except Exception as e:
-        logger.warning(f"⚠️ No se pudo derivar guardrails desde BankStrategy: {e}")
+        logger.warning(f"[WARN] No se pudo derivar guardrails desde BankStrategy: {e}")
 
     return g
 
@@ -374,7 +374,7 @@ def _pick_default_micro_vecnorm() -> Optional[str]:
     legacy = os.path.join(MODELS_DIR, "vecnormalize_final.pkl")
     if os.path.exists(legacy):
         logger.warning(
-            "⚠️ Usando VN legacy para MICRO: models/vecnormalize_final.pkl. "
+            "[WARN] Usando VN legacy para MICRO: models/vecnormalize_final.pkl. "
             "Recomendado: guardar como vecnormalize_loan.pkl."
         )
         return legacy
@@ -406,13 +406,13 @@ def _sanitize_vecnorm_paths(
     vn_loan = norm(vn_loan)
 
     if vn_macro and vn_micro and os.path.abspath(vn_macro) == os.path.abspath(vn_micro):
-        logger.warning("⚠️ VN macro == VN micro. Ignorando vn_macro para evitar mismatch loan vs portfolio.")
+        logger.warning("[WARN] VN macro == VN micro. Ignorando vn_macro para evitar mismatch loan vs portfolio.")
         vn_macro = None
 
     if vn_macro:
         b = os.path.basename(vn_macro).lower()
         if "loan" in b or "micro" in b:
-            logger.warning("⚠️ vn_macro parece de LoanEnv por nombre. Ignorando vn_macro para evitar mismatch.")
+            logger.warning("[WARN] vn_macro parece de LoanEnv por nombre. Ignorando vn_macro para evitar mismatch.")
             vn_macro = None
 
     if vn_loan is None:
@@ -494,7 +494,7 @@ def _load_portfolio_df(portfolio_path: str) -> pd.DataFrame:
         else:
             dfp = pd.read_csv(portfolio_path)
     except Exception as e:
-        logger.warning(f"⚠️ No se pudo leer portfolio para merge defensivo: {e}")
+        logger.warning(f"[WARN] No se pudo leer portfolio para merge defensivo: {e}")
         return pd.DataFrame()
 
     dfp = harmonize_portfolio_schema(dfp)
@@ -624,7 +624,7 @@ def _cib_rationale_row(
         proposed_action = _safe_str(flags.get("proposed_action", ""), "")
         txt = (
             f"[{rp_u}] RESTRUCT blocked: missing viability inputs (PTI/DSCR). "
-            f"Proposed={proposed_action or 'REESTRUCTURAR'} (Micro={accion_micro}, Macro={macro_action}) → Final={accion_final}. "
+            f"Proposed={proposed_action or 'REESTRUCTURAR'} (Micro={accion_micro}, Macro={macro_action}) -> Final={accion_final}. "
             f"DSCR={_fmt_metric(dscr)}, PTI={_fmt_metric(pti)}. "
             f"PD={_pct(pd_)}, LGD={_pct(lgd)}, DPD={dpd:.0f}."
         )
@@ -637,7 +637,7 @@ def _cib_rationale_row(
         code = "RC02_SELL_BLOCKED_FIRE_SALE"
         txt = (
             f"[{rp_u}] SELL blocked by fire-sale guardrail. "
-            f"Requested(Micro={accion_micro}, Macro={macro_action}) → Final={accion_final}. "
+            f"Requested(Micro={accion_micro}, Macro={macro_action}) -> Final={accion_final}. "
             f"CapRel={_fmt_eur(cap_rel)}, Price={_fmt_eur(price)}, P&L={_fmt_eur(pnl)}. "
             f"Risk PD={_pct(pd_)}, LGD={_pct(lgd)}, DPD={dpd:.0f}, Secured={secured}. "
             f"MacroEvidence={'YES' if _safe_str(macro_rationale).strip() else 'NO'}."
@@ -877,19 +877,19 @@ def _combine_decisions(
 
     n_rows = len(df)
     if n_rows == 0:
-        logger.warning("⚠️ _combine_decisions(): df_micro vacío → devolviendo vacío.")
+        logger.warning("[WARN] _combine_decisions(): df_micro vacío -> devolviendo vacío.")
         return df
 
     def _pad_or_trim(lst, fill):
         if len(lst) == n_rows:
             return lst
         if len(lst) == 0:
-            logger.warning(f"⚠️ _combine_decisions(): lista vacía detectada → rellenando con '{fill}'.")
+            logger.warning(f"[WARN] _combine_decisions(): lista vacía detectada -> rellenando con '{fill}'.")
             return [fill] * n_rows
         if len(lst) < n_rows:
-            logger.warning(f"⚠️ _combine_decisions(): len(lista)={len(lst)} < n_rows={n_rows} → padding con '{fill}'.")
+            logger.warning(f"[WARN] _combine_decisions(): len(lista)={len(lst)} < n_rows={n_rows} -> padding con '{fill}'.")
             return lst + [fill] * (n_rows - len(lst))
-        logger.warning(f"⚠️ _combine_decisions(): len(lista)={len(lst)} > n_rows={n_rows} → truncando.")
+        logger.warning(f"[WARN] _combine_decisions(): len(lista)={len(lst)} > n_rows={n_rows} -> truncando.")
         return lst[:n_rows]
 
     def _safe_bool_cell(v) -> bool:
@@ -2178,7 +2178,7 @@ def _combine_decisions(
                     
                     df.loc[escalate_mask, "required_data_flags"] = df.loc[escalate_mask].apply(_build_flags_postproc, axis=1)
     except Exception as e:
-        logger.warning(f"⚠️ Error en post-procesamiento de escalación: {e}")
+        logger.warning(f"[WARN] Error en post-procesamiento de escalación: {e}")
 
     return df
 
@@ -2251,7 +2251,7 @@ def run_coordinator_inference(
         )
         macro_actions = _build_macro_actions_per_loan(df_steps)
     else:
-        logger.warning("⚠️ No se ha encontrado modelo MACRO; se usarán solo decisiones micro.")
+        logger.warning("[WARN] No se ha encontrado modelo MACRO; se usarán solo decisiones micro.")
 
     # 3) COMBINAR
     df_final = _combine_decisions(

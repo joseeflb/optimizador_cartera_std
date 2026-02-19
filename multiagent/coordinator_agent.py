@@ -24,8 +24,8 @@ class CoordinatorAgent:
     """
     Agente principal que coordina:
       • PPO macro (PortfolioEnv)
-      • Reestructuración micro (restruct_agent.propose → optimize_restructure)
-      • Pricing micro (pricing_agent.price → simulate_npl_price)
+      • Reestructuración micro (restruct_agent.propose -> optimize_restructure)
+      • Pricing micro (pricing_agent.price -> simulate_npl_price)
       • StressEngine (opcional)
       • SensitivityEngine (opcional)
 
@@ -96,8 +96,8 @@ class CoordinatorAgent:
     def act_micro(self, loan_dict: Dict[str, Any]):
         """
         Llama a los subagentes micro:
-          • restruct_agent.propose(loan_dict)  → dict Banco L1.5
-          • pricing_agent.price(loan_dict)     → dict simulate_npl_price
+          • restruct_agent.propose(loan_dict)  -> dict Banco L1.5
+          • pricing_agent.price(loan_dict)     -> dict simulate_npl_price
         """
         restruct_suggestion = None
         pricing_suggestion = None
@@ -107,14 +107,14 @@ class CoordinatorAgent:
             if self.restruct_agent is not None:
                 restruct_suggestion = self.restruct_agent.propose(loan_dict)
         except Exception as e:
-            logger.warning(f"⚠ Error en micro_restruct: {e}")
+            logger.warning(f"[WARN] Error en micro_restruct: {e}")
 
         # --- Pricing ---
         try:
             if self.pricing_agent is not None:
                 pricing_suggestion = self.pricing_agent.price(loan_dict)
         except Exception as e:
-            logger.warning(f"⚠ Error en micro_pricing: {e}")
+            logger.warning(f"[WARN] Error en micro_pricing: {e}")
 
         return restruct_suggestion, pricing_suggestion
 
@@ -208,7 +208,7 @@ class CoordinatorAgent:
                 sens_score = self.sensitivity_engine.global_sensitivity_score(loan_dict)
                 razon.append(f"Sensibilidad global (palanca) ≈ {sens_score:,.0f}.")
             except Exception as e:
-                logger.warning(f"⚠ Error en SensitivityEngine: {e}")
+                logger.warning(f"[WARN] Error en SensitivityEngine: {e}")
 
         # ==========================================================
         # 3) Reglas prudenciales Banco L1.5 (estado base)
@@ -233,7 +233,7 @@ class CoordinatorAgent:
         extreme_risk = (pd_pre >= self.PD_ALTO and lgd_pre >= self.LGD_ALTO)
         if extreme_risk:
             razon.append(
-                f"Riesgo extremo (PD={pd_pre:.1%}, LGD={lgd_pre:.1%}) → prioridad venta si reestructura no es viable."
+                f"Riesgo extremo (PD={pd_pre:.1%}, LGD={lgd_pre:.1%}) -> prioridad venta si reestructura no es viable."
             )
 
         # ==========================================================
@@ -268,27 +268,27 @@ class CoordinatorAgent:
             # Sólo reestructurar si mejora MUCHO
             if restruct_material:
                 base_pref = "REESTRUCTURAR"
-                razon.append("Base: préstamo BUENO pero reestructura crea valor material → REESTRUCTURAR.")
+                razon.append("Base: préstamo BUENO pero reestructura crea valor material -> REESTRUCTURAR.")
             else:
                 base_pref = "MANTENER"
-                razon.append("Base: préstamo BUENO, la mejora no compensa intervenir → MANTENER.")
+                razon.append("Base: préstamo BUENO, la mejora no compensa intervenir -> MANTENER.")
 
         elif base_state == "MALO":
             # Si reestructuración viable, se intenta salvar; si no, venta
             if restruct_ok and restruct_material:
                 base_pref = "REESTRUCTURAR"
-                razon.append("Base: préstamo MALO pero reestructura viable y mejora EVA → REESTRUCTURAR.")
+                razon.append("Base: préstamo MALO pero reestructura viable y mejora EVA -> REESTRUCTURAR.")
             else:
                 base_pref = "VENDER"
-                razon.append("Base: préstamo MALO sin alternativa clara → VENDER.")
+                razon.append("Base: préstamo MALO sin alternativa clara -> VENDER.")
 
         else:  # AMBIGUO
             if restruct_ok and restruct_material:
                 base_pref = "REESTRUCTURAR"
-                razon.append("Base: préstamo AMBIGUO y reestructura aporta mejora material → REESTRUCTURAR.")
+                razon.append("Base: préstamo AMBIGUO y reestructura aporta mejora material -> REESTRUCTURAR.")
             else:
                 base_pref = "MANTENER"
-                razon.append("Base: préstamo AMBIGUO sin reestructura claramente favorable → MANTENER.")
+                razon.append("Base: préstamo AMBIGUO sin reestructura claramente favorable -> MANTENER.")
 
         # Asequibilidad extrema siempre inclina a VENDER
         if (not np.isnan(pti_pre) and pti_pre > self.PTI_CRITICO) or (
@@ -296,12 +296,12 @@ class CoordinatorAgent:
         ):
             base_pref = "VENDER"
             razon.append(
-                f"Asequibilidad crítica (PTI≈{pti_pre:.2f}, DSCR≈{dscr_pre:.2f}) → prioridad VENDER."
+                f"Asequibilidad crítica (PTI≈{pti_pre:.2f}, DSCR≈{dscr_pre:.2f}) -> prioridad VENDER."
             )
 
         if extreme_risk and not restruct_ok:
             base_pref = "VENDER"
-            razon.append("Riesgo extremo sin reestructura viable → prioridad VENDER.")
+            razon.append("Riesgo extremo sin reestructura viable -> prioridad VENDER.")
 
         # ==========================================================
         # 6) Heurísticas micro adicionales
@@ -311,7 +311,7 @@ class CoordinatorAgent:
         # Reestructuración con ΔEVA muy fuerte
         if restruct_ok and restruct_material and eva_gain > 2 * self.EVA_MIN_IMPROVEMENT_EUR:
             micro_pref = "REESTRUCTURAR"
-            razon.append("Micro: reestructura con ΔEVA muy fuerte → sugerencia REESTRUCTURAR.")
+            razon.append("Micro: reestructura con ΔEVA muy fuerte -> sugerencia REESTRUCTURAR.")
 
         # Venta micro si precio NPL favorable y EVA_pre < 0
         if price_sug is not None:
@@ -319,7 +319,7 @@ class CoordinatorAgent:
             if precio > 0 and eva_pre < 0:
                 micro_pref = "VENDER"
                 razon.append(
-                    f"Micro: precio NPL favorable (≈{precio:,.0f}€) con EVA_pre<0 → sugerencia VENDER."
+                    f"Micro: precio NPL favorable (≈{precio:,.0f}€) con EVA_pre<0 -> sugerencia VENDER."
                 )
 
         # ==========================================================
@@ -336,10 +336,10 @@ class CoordinatorAgent:
             razon.append("Override micro: reestructuración muy beneficiosa, se antepone a PPO.")
             accion_final = "REESTRUCTURAR"
         elif micro_pref is not None:
-            razon.append(f"Override micro → {micro_pref}.")
+            razon.append(f"Override micro -> {micro_pref}.")
             accion_final = micro_pref
         else:
-            razon.append(f"Fallback prudencial → {base_pref}.")
+            razon.append(f"Fallback prudencial -> {base_pref}.")
 
         # ==========================================================
         # 8) Salida final

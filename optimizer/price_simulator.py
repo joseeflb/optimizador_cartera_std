@@ -477,7 +477,7 @@ def simulate_npl_price(
     pd_str = "NA" if pd is None else f"{float(pd):.2f}"
 
     logger.info(
-        "🪙 Simulación precio NPL → "
+        "[PRICE] Simulación precio NPL -> "
         f"seg={seg_enum.name} | EAD={ead:,.0f} | LGD={lgd:.2f} | "
         f"PD_prob={pd_str} | RW_disc={rw_disc:.2f} | DPD={dpd:.0f} | "
         f"Book={book_value:,.2f} ({book_source}) | Price_neto={precio_neto:,.2f} | "

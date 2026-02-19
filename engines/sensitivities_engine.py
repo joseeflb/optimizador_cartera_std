@@ -122,7 +122,7 @@ class SensitivityEngine:
         Lógica coherente con StressEngine y LoanEnv.
         """
 
-        # Ya está curado → sensibilidad 0
+        # Ya está curado -> sensibilidad 0
         if loan.get("cured", False):
             return 0.0
 

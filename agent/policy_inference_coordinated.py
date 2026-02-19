@@ -19,10 +19,10 @@ Export:
       * Hoja Portfolio_Summary
 
 Cambios clave v2.2 (consistencia con price_simulator.py y restructure_optimizer.py):
-  - ✅ Venta: simulate_npl_price usando book_value/coverage_rate si existen.
-  - ✅ Guardrail fire-sale: por Price/Book (no por Price/Workout).
-  - ✅ RW: coerción robusta (100/150 → 1.0/1.5) y discretización DEFAULT.
-  - ✅ Reestructura: usa lógica bankable (optimize_restructure) con gates duros por segmento (PTI/DSCR).
+  - [OK] Venta: simulate_npl_price usando book_value/coverage_rate si existen.
+  - [OK] Guardrail fire-sale: por Price/Book (no por Price/Workout).
+  - [OK] RW: coerción robusta (100/150 -> 1.0/1.5) y discretización DEFAULT.
+  - [OK] Reestructura: usa lógica bankable (optimize_restructure) con gates duros por segmento (PTI/DSCR).
   - ✅ Score económico homogéneo (EUR): workout_value_proxy / sale_price_net / restructure_value_net.
   - ✅ Audit trail: drivers numéricos + reglas disparadas por postura.
 """
@@ -580,8 +580,8 @@ def micro_decision(row: Dict[str, Any], posture: cfg.BankProfile, horizon_months
     prefer_restruct = (np.isfinite(pti) and pti > esfuerzo_bajo) or (np.isfinite(dscr) and dscr > 0 and dscr < dscr_min)
 
     # Decisión micro:
-    # - si reestructura factible y mejora neta, y hay tensión → reestructurar
-    # - si venta pasa guardrail y domina → vender
+    # - si reestructura factible y mejora neta, y hay tensión -> reestructurar
+    # - si venta pasa guardrail y domina -> vender
     # - si no, mantener (workout)
     if bd_restruct.get("feasible", 0) == 1 and uplift_restruct > 0 and prefer_restruct:
         decision = "REESTRUCTURAR"
@@ -909,7 +909,7 @@ def coordinated_inference(
                 final_d = best_alt[0]
                 rationale_parts.append(
                     f"Coordinación: decisión por dominancia de valor total "
-                    f"(SELL={total_sell:,.0f}€, RESTR={total_restruct:,.0f}€, KEEP={total_keep:,.0f}€) → {final_d}."
+                    f"(SELL={total_sell:,.0f}€, RESTR={total_restruct:,.0f}€, KEEP={total_keep:,.0f}€) -> {final_d}."
                 )
 
         final_decisions.append(final_d)

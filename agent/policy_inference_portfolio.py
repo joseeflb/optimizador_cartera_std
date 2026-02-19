@@ -44,7 +44,7 @@ logging.basicConfig(
 logger = logging.getLogger("policy_inference_portfolio")
 
 # -----------------------------------------------------------
-# ⚙️ Config + RL
+# [CONFIG] Config + RL
 # -----------------------------------------------------------
 import config as cfg
 
@@ -329,7 +329,7 @@ def _pick_default_vn_loan_path() -> Optional[str]:
     legacy = os.path.join(MODELS_DIR, "vecnormalize_final.pkl")
     if os.path.exists(legacy):
         logger.warning(
-            "⚠️ Usando VN legacy para LOAN: models/vecnormalize_final.pkl. "
+            "[WARN] Usando VN legacy para LOAN: models/vecnormalize_final.pkl. "
             "Recomendado: renombrar/guardar como vecnormalize_loan.pkl."
         )
         return legacy
@@ -367,12 +367,12 @@ def _load_vecnormalize(vn_path: Optional[str], dummy_env: DummyVecEnv, label: st
     if not vn_path:
         return None
     if not os.path.exists(vn_path):
-        logger.warning(f"⚠️ VecNormalize {label} no existe: {vn_path}")
+        logger.warning(f"[WARN] VecNormalize {label} no existe: {vn_path}")
         return None
 
     if not _vn_name_looks_like(label, vn_path):
         logger.warning(
-            f"⚠️ VecNormalize {label} sospechoso por nombre: {vn_path}. "
+            f"[WARN] VecNormalize {label} sospechoso por nombre: {vn_path}. "
             f"Se intentará cargar pero se validará shape."
         )
     try:
@@ -385,14 +385,14 @@ def _load_vecnormalize(vn_path: Optional[str], dummy_env: DummyVecEnv, label: st
             vn_shape = getattr(getattr(vn, "obs_rms", None), "mean", None)
             vn_shape = getattr(vn_shape, "shape", None)
             logger.warning(
-                f"⚠️ VecNormalize {label} INVALIDADO por mismatch de shape: env={env_shape} vs vn={vn_shape} | {vn_path}"
+                f"[WARN] VecNormalize {label} INVALIDADO por mismatch de shape: env={env_shape} vs vn={vn_shape} | {vn_path}"
             )
             return None
 
-        logger.info(f"🔄 VecNormalize {label} cargado: {vn_path}")
+        logger.info(f"[VN] VecNormalize {label} cargado: {vn_path}")
         return vn
     except Exception as e:
-        logger.warning(f"⚠️ VecNormalize {label} incompatible (shape mismatch u otro): {vn_path} | {e}")
+        logger.warning(f"[WARN] VecNormalize {label} incompatible (shape mismatch u otro): {vn_path} | {e}")
         return None
 
 
@@ -560,13 +560,13 @@ def _macro_financial_action(
     )
 
     if n_active <= 0:
-        return 11, "KEEP", " ".join(rationale + ["No hay préstamos activos → NO-OP."])
+        return 11, "KEEP", " ".join(rationale + ["No hay préstamos activos -> NO-OP."])
 
     if EVA <= EVA_STRONGLY_NEG or (RWA > 0 and est_rorwa < hurdle - 0.004):
         if posture == "prudencial":
-            rationale.append("Cartera claramente destructiva → MIX/RESTRUCT antes de vender agresivo.")
+            rationale.append("Cartera claramente destructiva -> MIX/RESTRUCT antes de vender agresivo.")
             return 9, "MIX", " ".join(rationale)
-        rationale.append("Cartera claramente destructiva → baseline (10).")
+        rationale.append("Cartera claramente destructiva -> baseline (10).")
         return 10, "MIX", " ".join(rationale)
 
     if EVA >= EVA_POS_STRONG and est_rorwa >= hurdle + 0.003:
@@ -622,7 +622,7 @@ def _run_portfolio_inference_for_posture(
         try:
             cfg.set_bank_profile(prof)
         except Exception as e:
-            logger.warning(f"⚠️ No se pudo fijar bank_profile en config: {e}")
+            logger.warning(f"[WARN] No se pudo fijar bank_profile en config: {e}")
 
     # ✅ Mitigación: reload del módulo env.portfolio_env para refrescar aliases a nivel de módulo
     # (si en tu PortfolioEnv todavía usa BANK_PROFILE/BANK_STRAT como constantes import-time)
@@ -661,7 +661,7 @@ def _run_portfolio_inference_for_posture(
     if loan_path and os.path.exists(loan_path):
         model_micro = _load_ppo_model(loan_path, cfg_inf.device, label="MICRO")
     else:
-        logger.warning("⚠️ Modelo micro no encontrado → PortfolioEnv sin re-ranking micro.")
+        logger.warning("[WARN] Modelo micro no encontrado -> PortfolioEnv sin re-ranking micro.")
 
     # VecNormalize (con defaults seguros + validación shape)
     vn_port_path = cfg_inf.vecnormalize_portfolio_path or _pick_default_vn_portfolio_path()
@@ -713,7 +713,7 @@ def _run_portfolio_inference_for_posture(
         if action_fin is None:
             if (not guards["allow_sell_in_ambig"]) and rl_family == "SELL":
                 action_final = 4
-                combination_note = "Ambigua: PPO proponía SELL, guardrail prudencial → RESTRUCT top-K."
+                combination_note = "Ambigua: PPO proponía SELL, guardrail prudencial -> RESTRUCT top-K."
             else:
                 action_final = action_rl
                 combination_note = "Ambigua: se sigue PPO (con guardrails)."
@@ -727,24 +727,24 @@ def _run_portfolio_inference_for_posture(
                     combination_note = "Regla financiera=MIX, PPO refina dentro de MIX."
                 else:
                     action_final = fin_action
-                    combination_note = "Regla financiera=MIX, PPO fuera de MIX → se mantiene MIX."
+                    combination_note = "Regla financiera=MIX, PPO fuera de MIX -> se mantiene MIX."
             else:
                 if rl_family == fin_action_family:
                     action_final = action_rl
-                    combination_note = "PPO compatible con familia macro → PPO refina táctica."
+                    combination_note = "PPO compatible con familia macro -> PPO refina táctica."
                 else:
                     if guards["allow_rl_family_flip"]:
                         action_final = action_rl
                         combination_note = "Desinversión: se permite cambio de familia por PPO."
                     else:
                         action_final = fin_action
-                        combination_note = "PPO contradice familia macro → manda regla financiera."
+                        combination_note = "PPO contradice familia macro -> manda regla financiera."
 
         # Guardrail: limitar % steps SELL
         if _family(action_final) == "SELL":
             if (sell_steps + 1) / max(cfg_inf.n_steps, 1) > float(guards["max_steps_sell"]):
                 action_final = 9 if posture != "prudencial" else 4
-                combination_note += " | Guardrail: exceso de SELL → degradado a MIX/RESTRUCT."
+                combination_note += " | Guardrail: exceso de SELL -> degradado a MIX/RESTRUCT."
 
         obs, reward, done, truncated, info_step = env.step(action_final)
         pm = info_step.get("portfolio_metrics", {}) or {}

@@ -8,7 +8,7 @@ POC — OPTIMIZADOR DE CARTERAS EN DEFAULT (Método Estándar · Basilea III)
 
 Este script entrena **por separado** los dos niveles de agente:
 
-1️⃣ Subagente MICRO (LoanEnv)
+[1] Subagente MICRO (LoanEnv)
     - Observación: 10 features
     - Objetivo: política óptima MANTENER / REESTRUCTURAR / VENDER a nivel préstamo
     - Guarda (NUEVO, sin pisar):
@@ -18,7 +18,7 @@ Este script entrena **por separado** los dos niveles de agente:
         • models/best_model.zip
         • models/vecnormalize_final.pkl
 
-2️⃣ Subagente MACRO (PortfolioEnv)
+[2] Subagente MACRO (PortfolioEnv)
     - Objetivo: acciones macro sobre cartera
     - Guarda (NUEVO, con normalización propia):
         • models/best_model_portfolio.zip
@@ -177,7 +177,7 @@ def train_loan_agent(
     )
 
     device_final = _device_auto(device)
-    logger.info(f"⚙️ Dispositivo para LoanEnv: {device_final} | seed={seed_final}")
+    logger.info(f"[CONFIG] Dispositivo para LoanEnv: {device_final} | seed={seed_final}")
 
     model = PPO(
         policy=ppo_cfg.policy,
@@ -283,7 +283,7 @@ def train_portfolio_agent(
     )
 
     device_final = _device_auto(device)
-    logger.info(f"⚙️ Dispositivo para PortfolioEnv: {device_final} | seed={seed_final} | top_k={top_k} | scenario={scenario}")
+    logger.info(f"[CONFIG] Dispositivo para PortfolioEnv: {device_final} | seed={seed_final} | top_k={top_k} | scenario={scenario}")
 
     model = PPO(
         policy=ppo_cfg.policy,
@@ -422,7 +422,7 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        logger.warning("⚠️ Entrenamiento interrumpido manualmente.")
+        logger.warning("[WARN] Entrenamiento interrumpido manualmente.")
     except Exception as e:
-        logger.error(f"❌ Error crítico en train_subagents: {e}")
+        logger.error(f"[ERR] Error crítico en train_subagents: {e}")
         raise

@@ -71,7 +71,7 @@ def _load_summary_styler():
         from export_styled_excel_summary import export_styled_excel_summary  # type: ignore
         return export_styled_excel_summary
     except Exception as e:
-        logger.warning(f"⚠️ No se pudo importar export_styled_excel_summary (se usará fallback básico): {e}")
+        logger.warning(f"[WARN] No se pudo importar export_styled_excel_summary (se usará fallback básico): {e}")
         return None
 
 
@@ -137,7 +137,7 @@ def find_summary_files_with_fallback(source_dir: str) -> List[str]:
             uniq.append(f)
 
     if not uniq:
-        logger.warning("⚠️ No se encontró ningún summary.csv. Directorios inspeccionados:")
+        logger.warning("[WARN] No se encontró ningún summary.csv. Directorios inspeccionados:")
         for d in searched:
             logger.warning(f"   - {d}")
 
@@ -174,7 +174,7 @@ def consolidate_summaries(source_dir: str) -> pd.DataFrame:
         try:
             df = pd.read_csv(f)
             if df is None or df.shape[0] == 0:
-                logger.info(f"ℹ️ {f} está vacío. Saltando.")
+                logger.info(f"[INFO] {f} está vacío. Saltando.")
                 continue
 
             # normaliza columnas por robustez (evita 'label ' vs 'label')
@@ -184,7 +184,7 @@ def consolidate_summaries(source_dir: str) -> pd.DataFrame:
             df["inference_id"] = os.path.basename(os.path.dirname(f))
             dfs.append(df)
         except Exception as e:
-            logger.warning(f"⚠️ Error leyendo {f}: {e}")
+            logger.warning(f"[WARN] Error leyendo {f}: {e}")
 
     if not dfs:
         return _empty_runlevel_df()
@@ -209,12 +209,12 @@ def consolidate_summaries(source_dir: str) -> pd.DataFrame:
 # -----------------------------------------------------------
 def plot_metric_evolution(df: pd.DataFrame, out_path: str):
     if df.empty:
-        logger.info("ℹ️ DF vacío: no se generan gráficos (metric_evolution).")
+        logger.info("[INFO] DF vacío: no se generan gráficos (metric_evolution).")
         return
 
     metrics = [c for c in ["evamean", "delta_eva_mean", "capital_liberado_mean"] if c in df.columns]
     if not metrics:
-        logger.info("ℹ️ No hay métricas para gráfico de evolución.")
+        logger.info("[INFO] No hay métricas para gráfico de evolución.")
         return
 
     plt.figure(figsize=(9, 5))
@@ -234,12 +234,12 @@ def plot_metric_evolution(df: pd.DataFrame, out_path: str):
 
 def plot_comparison_bars(df: pd.DataFrame, out_path: str):
     if df.empty:
-        logger.info("ℹ️ DF vacío: no se generan gráficos (comparison_bars).")
+        logger.info("[INFO] DF vacío: no se generan gráficos (comparison_bars).")
         return
 
     cols = [c for c in ["evamean", "delta_eva_mean", "capital_liberado_mean"] if c in df.columns]
     if not cols:
-        logger.info("ℹ️ No hay métricas para gráfico de barras.")
+        logger.info("[INFO] No hay métricas para gráfico de barras.")
         return
 
     grouped = df.groupby("label")[cols].mean(numeric_only=True)
@@ -256,12 +256,12 @@ def plot_comparison_bars(df: pd.DataFrame, out_path: str):
 # -----------------------------------------------------------
 def compute_ratios(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "label" not in df.columns:
-        logger.info("ℹ️ DF vacío o sin label → skipping ratio calc.")
+        logger.info("[INFO] DF vacío o sin label -> skipping ratio calc.")
         return df
 
     base_mask = df["label"].astype(str).str.contains("baseline", case=False, na=False)
     if not base_mask.any():
-        logger.info("ℹ️ No baseline found → skipping ratio calc.")
+        logger.info("[INFO] No baseline found -> skipping ratio calc.")
         return df
 
     base = df[base_mask].mean(numeric_only=True)
@@ -270,7 +270,7 @@ def compute_ratios(df: pd.DataFrame) -> pd.DataFrame:
         if col in df.columns:
             df[f"uplift_{col}_%"] = ratio_change(df[col], base.get(col, np.nan))
 
-    logger.info("📈 Ratios de mejora calculados.")
+    logger.info("[RATIOS] Ratios de mejora calculados.")
     return df
 
 
@@ -319,7 +319,7 @@ def generate_executive_summary(df: pd.DataFrame, out_txt: str):
     with open(out_txt, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
 
-    logger.info(f"📝 Executive summary generado: {out_txt}")
+    logger.info(f"[SUMMARY] Executive summary generado: {out_txt}")
 
 
 # -----------------------------------------------------------
@@ -329,7 +329,7 @@ def export_outputs(df: pd.DataFrame, save_excel: bool, save_json: bool):
     # CSV siempre
     csv_path = os.path.join(SUMMARY_DIR, "summary_consolidated.csv")
     df.to_csv(csv_path, index=False, encoding="utf-8")
-    logger.info(f"💾 CSV consolidado: {csv_path}")
+    logger.info(f"[SAVE] CSV consolidado: {csv_path}")
 
     # Excel (RUN-LEVEL styler)
     if save_excel:
@@ -339,18 +339,18 @@ def export_outputs(df: pd.DataFrame, save_excel: bool, save_json: bool):
         try:
             if df.empty:
                 df.to_excel(out_xlsx, index=False)
-                logger.info(f"💾 Excel básico (vacío): {out_xlsx}")
+                logger.info(f"[SAVE] Excel básico (vacío): {out_xlsx}")
             else:
                 if EXPORT_STYLED_SUMMARY is not None:
                     EXPORT_STYLED_SUMMARY(df, out_xlsx)
-                    logger.info(f"💾 Excel estilizado (RUN-LEVEL): {out_xlsx}")
+                    logger.info(f"[SAVE] Excel estilizado (RUN-LEVEL): {out_xlsx}")
                 else:
                     df.to_excel(out_xlsx, index=False)
-                    logger.info(f"💾 Excel básico (fallback): {out_xlsx}")
+                    logger.info(f"[SAVE] Excel básico (fallback): {out_xlsx}")
         except Exception as e:
-            logger.warning(f"⚠️ Falló export Excel ({e}). Exportando Excel básico.")
+            logger.warning(f"[WARN] Falló export Excel ({e}). Exportando Excel básico.")
             df.to_excel(out_xlsx, index=False)
-            logger.info(f"💾 Excel básico (fallback): {out_xlsx}")
+            logger.info(f"[SAVE] Excel básico (fallback): {out_xlsx}")
 
     # JSON
     if save_json:

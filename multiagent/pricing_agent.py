@@ -139,5 +139,5 @@ class PricingAgent:
             return out
 
         except Exception as e:
-            logger.warning(f"⚠ Error en PricingAgent.price(): {e}")
+            logger.warning(f"[WARN] Error en PricingAgent.price(): {e}")
             return None

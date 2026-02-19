@@ -186,7 +186,7 @@ PRODUCT_EAD_MULT = {
 
 
 # ---------------------------------------------------------------------
-# ⚙️ Funciones auxiliares
+# [HELPERS] Funciones auxiliares
 # ---------------------------------------------------------------------
 def simulate_pd_lgd_base(rng_local: np.random.Generator, rating: str) -> tuple[float, float]:
     """Base (pre-default) por rating, luego se ajusta a NPL."""
@@ -657,11 +657,11 @@ def export_excel(df: pd.DataFrame, out_path: str):
 
     wb.save(out_path)
     wb.close()
-    print(f"💾 Cartera exportada correctamente → {out_path}")
+    print(f"[SAVE] Cartera exportada correctamente -> {out_path}")
 
 
 # ---------------------------------------------------------------------
-# ▶️ CLI
+# [CLI] CLI
 # ---------------------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(
@@ -676,8 +676,8 @@ def main():
     export_excel(df, args.out)
 
     print(
-        f"✅ Cartera NPL (100% DEFAULT) generada "
-        f"({len(df)} préstamos) → {args.out} | RW∈[{df['RW'].min():.2f}, {df['RW'].max():.2f}]"
+        f"[DONE] Cartera NPL (100% DEFAULT) generada "
+        f"({len(df)} préstamos) -> {args.out} | RW∈[{df['RW'].min():.2f}, {df['RW'].max():.2f}]"
     )
 
 

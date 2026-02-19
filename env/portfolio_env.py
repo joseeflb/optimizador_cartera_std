@@ -94,7 +94,7 @@ def _setup_portfolio_logger() -> None:
             fh.setFormatter(fmt)
             logger.addHandler(fh)
     except Exception as e:
-        logger.warning(f"⚠️ No se pudo configurar FileHandler para portfolio_env: {e}")
+        logger.warning(f"[WARN] No se pudo configurar FileHandler para portfolio_env: {e}")
 
     logger._portfolio_env_configured = True
 
@@ -322,12 +322,12 @@ class PortfolioEnv(gym.Env):
 
         # coherencia con el action-map 0..11
         if self.n_actions < 12:
-            logger.warning(f"⚠️ portfolio_n_actions={self.n_actions} < 12. Forzando a 12 para compatibilidad.")
+            logger.warning(f"[WARN] portfolio_n_actions={self.n_actions} < 12. Forzando a 12 para compatibilidad.")
             self.n_actions = 12
 
         self.vol_window = int(_cfg_get(self.env_cfg, "portfolio_eva_vol_window", 8))
 
-        # ✅ pesos por postura (fallback reward_cfg)
+        # [OK] pesos por postura (fallback reward_cfg)
         self.w_vol = self._p("w_vol", float(getattr(self.reward_cfg, "w_vol", 0.0)))
         self.w_conc = self._p("w_concentration", float(getattr(self.reward_cfg, "w_concentration", 0.0)))
         self.w_cap_carry = self._p("w_cap_carry", float(getattr(self.reward_cfg, "w_cap_carry", 0.0)))
@@ -423,13 +423,13 @@ class PortfolioEnv(gym.Env):
             vn.norm_reward = False
 
             if not self._vn_shape_ok(vn, expected_dim=10):
-                logger.warning(f"⚠️ Micro VN invalidado por shape mismatch: {path}")
+                logger.warning(f"[WARN] Micro VN invalidado por shape mismatch: {path}")
                 return None
 
-            logger.info(f"🔄 Micro VecNormalize cargado: {path}")
+            logger.info(f"[VN] Micro VecNormalize cargado: {path}")
             return vn
         except Exception as e:
-            logger.warning(f"⚠️ No se pudo cargar Micro VecNormalize ({path}): {e}")
+            logger.warning(f"[WARN] No se pudo cargar Micro VecNormalize ({path}): {e}")
             return None
 
     def _micro_is_adapter(self) -> bool:

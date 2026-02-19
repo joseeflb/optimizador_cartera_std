@@ -166,11 +166,11 @@ def export_financial_decisions(df: pd.DataFrame, out_dir: str) -> Dict[str, Any]
     export_financial_excel(df_enriched, excel_path)
     export_financial_json(df_enriched, json_path)
 
-    logger.info("✅ Informe financiero detallado exportado correctamente.")
+    logger.info("[DONE] Informe financiero detallado exportado correctamente.")
     return {"excel": excel_path, "json": json_path, "records": len(df_enriched)}
 
 # -----------------------------------------------------------
-# ▶️ CLI rápido
+# [CLI] CLI rápido
 # -----------------------------------------------------------
 if __name__ == "__main__":
     import argparse

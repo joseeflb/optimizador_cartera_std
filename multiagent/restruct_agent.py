@@ -161,5 +161,5 @@ class RestructAgent:
             return out
 
         except Exception as e:
-            logger.warning(f"⚠ Error en RestructAgent.propose(): {e}")
+            logger.warning(f"[WARN] Error en RestructAgent.propose(): {e}")
             return None

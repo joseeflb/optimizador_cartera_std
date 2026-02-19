@@ -270,12 +270,12 @@ def _pick_default_vn_loan_path() -> Optional[str]:
 
     legacy = os.path.join(MODELS_DIR, "vecnormalize_final.pkl")
     if os.path.exists(legacy):
-        logger.warning("[WARNING] Usando VN legacy para LOAN: models/vecnormalize_final.pkl. Recomendado: vecnormalize_loan.pkl.")
+        logger.warning("[WARN] Usando VN legacy para LOAN: models/vecnormalize_final.pkl. Recomendado: vecnormalize_loan.pkl.")
         return legacy
 
     legacy2 = os.path.join(MODELS_DIR, "best_model_vecnormalize.pkl")
     if os.path.exists(legacy2):
-        logger.warning("[WARNING] Usando VN legacy2 para LOAN: models/best_model_vecnormalize.pkl. Recomendado: vecnormalize_loan.pkl.")
+        logger.warning("[WARN] Usando VN legacy2 para LOAN: models/best_model_vecnormalize.pkl. Recomendado: vecnormalize_loan.pkl.")
         return legacy2
 
     return None
@@ -297,7 +297,7 @@ def _load_vecnormalize_loan(vn_path: Optional[str], dummy_env: DummyVecEnv) -> O
     if not vn_path:
         return None
     if not os.path.exists(vn_path):
-        logger.warning(f"[WARNING] VecNormalize LOAN no existe: {vn_path}")
+        logger.warning(f"[WARN] VecNormalize LOAN no existe: {vn_path}")
         return None
     try:
         vn = VecNormalize.load(vn_path, dummy_env)
@@ -308,13 +308,13 @@ def _load_vecnormalize_loan(vn_path: Optional[str], dummy_env: DummyVecEnv) -> O
             env_shape = getattr(dummy_env.observation_space, "shape", None)
             vn_mean = getattr(getattr(vn, "obs_rms", None), "mean", None)
             vn_shape = getattr(vn_mean, "shape", None)
-            logger.warning(f"[WARNING] VecNormalize LOAN INVALIDADO por mismatch: env={env_shape} vs vn={vn_shape} | {vn_path}")
+            logger.warning(f"[WARN] VecNormalize LOAN INVALIDADO por mismatch: env={env_shape} vs vn={vn_shape} | {vn_path}")
             return None
 
-        logger.info(f"[VECNORM] VecNormalize LOAN cargado: {vn_path}")
+        logger.info(f"[VN] VecNormalize LOAN cargado: {vn_path}")
         return vn
     except Exception as e:
-        logger.warning(f"[WARNING] VecNormalize LOAN incompatible: {vn_path} | {e}")
+        logger.warning(f"[WARN] VecNormalize LOAN incompatible: {vn_path} | {e}")
         return None
 
 
@@ -493,7 +493,7 @@ def load_policy(model_path: str, cfg_inf: InferenceConfig) -> Tuple[PPO, Optiona
     logger.info(f"[MODEL] Modelo PPO cargado desde: {model_path} [device={device_final}]")
 
     if vn_env is None:
-        logger.warning("[WARNING] PPO sin VecNormalize (se usará obs raw).")
+        logger.warning("[WARN] PPO sin VecNormalize (se usará obs raw).")
     return model, vn_env
 
 
@@ -563,7 +563,7 @@ def _run_inference_for_posture(
     try:
         model, vn_env = load_policy(cfg_inf.model_path, cfg_inf)
     except Exception as e:
-        logger.warning(f"[WARNING] No se pudo cargar el modelo PPO; se usará lógica financiera pura: {e}")
+        logger.warning(f"[WARN] No se pudo cargar el modelo PPO; se usará lógica financiera pura: {e}")
 
     decisions: List[Dict[str, Any]] = []
 
@@ -625,7 +625,7 @@ def _run_inference_for_posture(
                 hurdle=hurdle,
             )
         except Exception as e:
-            logger.warning(f"[WARNING] Error optimize_restructure loan_id={loan_id}: {e}")
+            logger.warning(f"[WARN] Error optimize_restructure loan_id={loan_id}: {e}")
             restruct = None
 
         eva_post = base_eva
@@ -708,17 +708,17 @@ def _run_inference_for_posture(
 
         if pti_post is not None and float(pti_post) > PTI_CRITICO:
             restruct_viable = False
-            finance_reason_steps.append(f"PTI_post={float(pti_post):.2f} > {PTI_CRITICO:.2f} → esfuerzo inasumible, reestructura descartada.")
+            finance_reason_steps.append(f"PTI_post={float(pti_post):.2f} > {PTI_CRITICO:.2f} -> esfuerzo inasumible, reestructura descartada.")
         if dscr_post is not None and float(dscr_post) < DSCR_MIN:
             restruct_viable = False
-            finance_reason_steps.append(f"DSCR_post={float(dscr_post):.2f} < {DSCR_MIN:.2f} → flujo insuficiente, reestructura descartada.")
+            finance_reason_steps.append(f"DSCR_post={float(dscr_post):.2f} < {DSCR_MIN:.2f} -> flujo insuficiente, reestructura descartada.")
 
         # Venta NPL (fuente única)
         price_for_sell: Dict[str, Any] = {}
         try:
             price_for_sell = _sale_pack_from_row(row, posture)
         except Exception as e:
-            logger.warning(f"[WARNING] Error simulate_npl_price loan_id={loan_id}: {e}")
+            logger.warning(f"[WARN] Error simulate_npl_price loan_id={loan_id}: {e}")
             price_for_sell = {}
 
         precio_opt = _safe_float(price_for_sell.get("precio_optimo", 0.0))
@@ -763,11 +763,11 @@ def _run_inference_for_posture(
                 px_ead = _price_to_ead(precio_opt, base_ead)
                 px_txt = f"{px_ead:.2f}" if np.isfinite(px_ead) else "NA"
                 sell_blocked_reason = f"FIRE_SALE(legacy): px/EAD={px_txt} or P&L abs threshold"
-            finance_reason_steps.append(f"Guardrail fire-sale: {sell_blocked_reason} → venta bloqueada.")
+            finance_reason_steps.append(f"Guardrail fire-sale: {sell_blocked_reason} -> venta bloqueada.")
 
         risk_extremo = (base_pd >= PD_ALTO and base_lgd >= LGD_ALTO and not restruct_viable)
         if risk_extremo:
-            finance_reason_steps.append(f"Riesgo extremo NPL (PD={base_pd:.1%}, LGD={base_lgd:.1%}) sin reestructura viable → sesgo hacia VENDER.")
+            finance_reason_steps.append(f"Riesgo extremo NPL (PD={base_pd:.1%}, LGD={base_lgd:.1%}) sin reestructura viable -> sesgo hacia VENDER.")
 
         # Normalizaciones
         ead_scale = max(base_ead, 1.0)
@@ -837,7 +837,7 @@ def _run_inference_for_posture(
             score_sell += 0.05 * (W_EVA * abs(eva_pre_n) + W_CAPITAL * cap_rel_sell_n)
 
         if not sell_allowed:
-            finance_reason_steps.append("Venta bloqueada por política/guardrails → score_sell desactivado.")
+            finance_reason_steps.append("Venta bloqueada por política/guardrails -> score_sell desactivado.")
             score_sell = -1e12
 
         scores["VENDER"] = float(score_sell)
@@ -861,24 +861,24 @@ def _run_inference_for_posture(
         )
 
         if base_state == "BUENO" and decision_financial == "VENDER":
-            finance_reason_steps.append("Guardrail: préstamo BUENO → no se vende; se fuerza MANTENER.")
+            finance_reason_steps.append("Guardrail: préstamo BUENO -> no se vende; se fuerza MANTENER.")
             decision_financial = "MANTENER"
 
         decision_override: Optional[str] = None
         if base_eva >= EVA_MIN_IMPROVEMENT_EUR and dscr_base is not None and dscr_base >= DSCR_MIN:
             decision_override = "MANTENER"
-            finance_reason_steps.append("Override perfil: zona cómoda (EVA y DSCR) → MANTENER.")
+            finance_reason_steps.append("Override perfil: zona cómoda (EVA y DSCR) -> MANTENER.")
         elif base_eva <= EVA_STRONGLY_NEG_EUR:
             if bank_profile == cfg.BankProfile.DESINVERSION:
                 decision_override = "VENDER"
-                finance_reason_steps.append("Override DESINVERSION: EVA muy negativa → VENDER.")
+                finance_reason_steps.append("Override DESINVERSION: EVA muy negativa -> VENDER.")
             elif bank_profile == cfg.BankProfile.PRUDENTE:
                 if restruct_viable:
                     decision_override = "REESTRUCTURAR"
                     finance_reason_steps.append("Override PRUDENTE: reestructurar antes de vender.")
                 else:
                     decision_override = "VENDER"
-                    finance_reason_steps.append("Override PRUDENTE: sin reestructura viable → VENDER.")
+                    finance_reason_steps.append("Override PRUDENTE: sin reestructura viable -> VENDER.")
 
         decision_ppo: Optional[str] = None
         decision_final = decision_override or decision_financial
@@ -892,17 +892,17 @@ def _run_inference_for_posture(
                     a_pred, _ = model.predict(obs, deterministic=cfg_inf.deterministic)
                     decision_ppo = _translate_action(int(np.squeeze(a_pred)))
                     used_ppo = True
-                    finance_reason_steps.append(f"Desempate PPO → sugiere {decision_ppo}.")
+                    finance_reason_steps.append(f"Desempate PPO -> sugiere {decision_ppo}.")
 
                     if decision_ppo in scores and scores[decision_ppo] >= best_score - 0.10 * abs(best_score):
                         decision_final = decision_ppo
-                        finance_reason_steps.append(f"PPO dentro de tolerancia → se adopta {decision_final}.")
+                        finance_reason_steps.append(f"PPO dentro de tolerancia -> se adopta {decision_final}.")
                 except Exception as e:
                     finance_reason_steps.append(f"No se pudo usar PPO ({e}); se mantiene {decision_final}.")
 
         if decision_final is None:
             decision_final = "VENDER"
-            finance_reason_steps.append("Fallback: acción no determinada → VENDER por prudencia.")
+            finance_reason_steps.append("Fallback: acción no determinada -> VENDER por prudencia.")
 
         final_rationale = " | ".join(
             [
@@ -1005,7 +1005,7 @@ def _run_inference_for_posture(
 
             finance_reason_steps += [
                 f"Acción final REESTRUCTURAR: EVA_post={eva_post:,.0f}€ (ΔEVA={eva_gain:,.0f}€), "
-                f"RWA_post≈{rwa_post:,.0f} → cap_lib≈{capital_lib_restruct:,.0f}€."
+                f"RWA_post≈{rwa_post:,.0f} -> cap_lib≈{capital_lib_restruct:,.0f}€."
             ]
 
         elif decision_final == "VENDER":
@@ -1041,7 +1041,7 @@ def _run_inference_for_posture(
             decision["pnl_realized"] = 0.0
             decision["capital_release_realized"] = 0.0
 
-        decision["Explain_Steps"] = " → ".join(finance_reason_steps)
+        decision["Explain_Steps"] = " -> ".join(finance_reason_steps)
         decisions.append(decision)
 
     df_dec = pd.DataFrame(decisions)
@@ -1159,7 +1159,7 @@ def parse_args() -> InferenceConfig:
 
     vn = a.vn.strip() or None
     if vn and not os.path.exists(vn):
-        logger.warning(f"[WARNING] --vn indicado pero no existe: {vn}. Se ignorará.")
+        logger.warning(f"[WARN] --vn indicado pero no existe: {vn}. Se ignorará.")
         vn = None
 
     out_dir = a.out_dir.strip() or None

@@ -97,7 +97,7 @@ def set_global_seeds(seed: int) -> None:
 
 
 # -----------------------------------------------------------
-# ⚙️ Configuración de entrenamiento
+# [CONFIG] Configuración de entrenamiento
 # -----------------------------------------------------------
 @dataclass
 class TrainConfig:
@@ -278,7 +278,7 @@ class BusinessEvalCallback(BaseCallback):
                 self.eval_env.training = False
                 self.eval_env.norm_reward = False
         except Exception as e:
-            logger.warning(f"⚠️ Error sincronizando VecNormalize: {e}")
+            logger.warning(f"[WARN] Error sincronizando VecNormalize: {e}")
 
     def _save_best_bundle(self):
         if not self.best_model_path:
@@ -290,7 +290,7 @@ class BusinessEvalCallback(BaseCallback):
                 vn_path = self.best_model_path.replace(".zip", "_vecnormalize.pkl")
                 vn.save(vn_path)
         except Exception as e:
-            logger.warning(f"⚠️ No se pudo guardar VecNormalize del best model: {e}")
+            logger.warning(f"[WARN] No se pudo guardar VecNormalize del best model: {e}")
 
     def _score_from_episode_metrics(self, m: Dict[str, float]) -> float:
         base = (m["eva_final"] / self.scale_mm) + self.cap_weight * (m["cap_total"] / self.scale_mm)
@@ -467,10 +467,10 @@ def load_micro_policy(micro_model_path: str, micro_vecnorm_path: str) -> Optiona
 
     if micro_vecnorm_path:
         if not os.path.exists(micro_vecnorm_path):
-            raise FileNotFoundError(f"❌ micro_vecnorm no existe: {micro_vecnorm_path}")
-        logger.info(f"🔎 Micro VecNormalize provisto: {micro_vecnorm_path}")
+            raise FileNotFoundError(f"[ERR] micro_vecnorm no existe: {micro_vecnorm_path}")
+        logger.info(f"[INFO] Micro VecNormalize provisto: {micro_vecnorm_path}")
     else:
-        logger.warning("⚠️ micro_vecnorm_path vacío: el re-ranking micro podría ir sin normalización.")
+        logger.warning("[WARN] micro_vecnorm_path vacío: el re-ranking micro podría ir sin normalización.")
 
     ppo = PPO.load(micro_model_path, device="cpu")
     return ppo
@@ -498,7 +498,7 @@ def train(cfg_train: TrainConfig) -> str:
 
     # FAST DEBUG
     if cfg_train.fast_debug or cfg.CONFIG.fast_debug:
-        logger.info("⚙️ FAST-DEBUG activado")
+        logger.info("[DEBUG] FAST-DEBUG activado")
         cfg_train.total_timesteps = 25_000
         cfg_train.n_envs = 1
         cfg_train.n_steps = 256
@@ -535,10 +535,10 @@ def train(cfg_train: TrainConfig) -> str:
     # (Opcional) cargar PPO micro si entrenas PortfolioEnv con re-ranking
     ppo_micro = None
     if cfg_train.env_type == "portfolio" and cfg_train.micro_model_path:
-        logger.info("🔗 Cargando PPO micro para re-ranking (PortfolioEnv micro→macro).")
+        logger.info("[LINK] Cargando PPO micro para re-ranking (PortfolioEnv micro->macro).")
         ppo_micro = load_micro_policy(cfg_train.micro_model_path, cfg_train.micro_vecnorm_path)
         if cfg_train.n_envs != 1:
-            logger.warning("⚠️ Con PPO micro activo se fuerza n_envs=1 (DummyVecEnv).")
+            logger.warning("[WARN] Con PPO micro activo se fuerza n_envs=1 (DummyVecEnv).")
             cfg_train.n_envs = 1
 
     # Frecuencia/Chunks para checkpoints
@@ -680,12 +680,12 @@ def train(cfg_train: TrainConfig) -> str:
                 vn_ckpt = os.path.join(ckpt_dir, f"ppo_{steps_done:07d}_vecnormalize.pkl")
                 vn.save(vn_ckpt)
         except Exception as e:
-            logger.warning(f"⚠️ No se pudo guardar VN checkpoint: {e}")
+            logger.warning(f"[WARN] No se pudo guardar VN checkpoint: {e}")
 
-        logger.info(f"📂 Guardado checkpoint: {ckpt_path}")
+        logger.info(f"[SAVE] Guardado checkpoint: {ckpt_path}")
 
         if eval_cb.stopped_early:
-            logger.info("🛑 Entrenamiento detenido por early stopping.")
+            logger.info("[STOP] Entrenamiento detenido por early stopping.")
             break
 
     # Guardar modelo final (por entorno)
@@ -696,18 +696,18 @@ def train(cfg_train: TrainConfig) -> str:
         vec_env.save(vn_path_final)
 
     duration = (time.time() - start) / 60.0
-    logger.info(f"⏱️ Duración total: {duration:.2f} min")
-    logger.info(f"🏆 Mejor modelo: {best_model_path}")
-    logger.info(f"📦 Último modelo: {last_model_path}")
-    logger.info(f"🧠 VecNormalize final: {vn_path_final}")
-    logger.info(f"📁 Checkpoints: {ckpt_dir}")
-    logger.info(f"🧾 Metadata: {metadata_path}")
+    logger.info(f"[TIME] Duración total: {duration:.2f} min")
+    logger.info(f"[BEST] Mejor modelo: {best_model_path}")
+    logger.info(f"[LAST] Último modelo: {last_model_path}")
+    logger.info(f"[VN] VecNormalize final: {vn_path_final}")
+    logger.info(f"[CKPT] Checkpoints: {ckpt_dir}")
+    logger.info(f"[META] Metadata: {metadata_path}")
 
     return best_model_path
 
 
 # -----------------------------------------------------------
-# ▶️ CLI
+# [CLI] CLI
 # -----------------------------------------------------------
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description="Entrenar PPO sobre LoanEnv o PortfolioEnv")

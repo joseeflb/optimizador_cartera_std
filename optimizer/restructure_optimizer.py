@@ -869,7 +869,7 @@ def optimize_heuristic(
             results.append(out_row)
 
         except Exception as e:
-            logger.warning(f"⚠️ Error optimizando préstamo en heurístico: {e}")
+            logger.warning(f"[WARN] Error optimizando préstamo en heurístico: {e}")
             continue
 
     out = pd.DataFrame(results)

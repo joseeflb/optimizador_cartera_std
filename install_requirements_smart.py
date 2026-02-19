@@ -25,9 +25,9 @@ def _run(cmd, check=True, quiet=False):
 # ------------------------------------------------
 try:
     _run([python_exec, "-m", "pip", "install", "--upgrade", "pip"], quiet=True)
-    print("✅ pip actualizado correctamente.\n")
+    print("[OK] pip actualizado correctamente.\n")
 except Exception:
-    print("⚠️  No se pudo actualizar pip, se usará la versión actual.\n")
+    print("[WARN]  No se pudo actualizar pip, se usará la versión actual.\n")
 
 
 # ------------------------------------------------
@@ -40,7 +40,7 @@ requirements = {
     "scipy": "1.14.1",
     "joblib": "1.4.2",
     "tqdm": "4.66.5",
-    "rich": "13.9.4",   # ⬅️ NECESARIO para progress_bar de SB3
+    "rich": "13.9.4",   # [REQ] NECESARIO para progress_bar de SB3
 
     # Excel / reporting
     "openpyxl": "3.1.5",
@@ -78,25 +78,25 @@ def is_installed(pkg_name: str, expected_version: str) -> bool:
         module = importlib.import_module(pkg_name)
         version = getattr(module, "__version__", None)
         if version == expected_version:
-            print(f"✅ {pkg_name} ya está instalado ({version})")
+            print(f"[OK] {pkg_name} ya está instalado ({version})")
             return True
         elif version:
-            print(f"⚠️  {pkg_name} instalado ({version}), esperado {expected_version}")
+            print(f"[WARN]  {pkg_name} instalado ({version}), esperado {expected_version}")
             return False
         else:
-            print(f"⚠️  {pkg_name} instalado sin versión visible")
+            print(f"[WARN]  {pkg_name} instalado sin versión visible")
             return False
     except ModuleNotFoundError:
-        print(f"❌ {pkg_name} no está instalado.")
+        print(f"[ERR] {pkg_name} no está instalado.")
         return False
     except ImportError as e:
-        print(f"⚠️  {pkg_name} instalado pero no importable ({e})")
+        print(f"[WARN]  {pkg_name} instalado pero no importable ({e})")
         return False
 
 
 def install(pkg_name: str, version: str):
     pip_name = pkg_name.replace("_", "-")
-    print(f"📦 Instalando {pip_name}=={version} ...")
+    print(f"[INSTALL] Instalando {pip_name}=={version} ...")
     try:
         subprocess.check_call([
             python_exec, "-m", "pip", "install",
@@ -105,10 +105,10 @@ def install(pkg_name: str, version: str):
             "--no-build-isolation",
             "--upgrade-strategy", "only-if-needed"
         ])
-        print(f"✅ {pkg_name} instalado correctamente.\n")
+        print(f"[OK] {pkg_name} instalado correctamente.\n")
     except subprocess.CalledProcessError:
         print(
-            f"❌ Error instalando {pkg_name}. "
+            f"[ERR] Error instalando {pkg_name}. "
             f"Puede no existir wheel para Python {sys.version_info.major}.{sys.version_info.minor}.\n"
         )
 
@@ -117,7 +117,7 @@ def install_torch_tolerant(expected_version: str):
     if is_installed("torch", expected_version):
         return
 
-    print(f"📦 Instalando torch=={expected_version} ...")
+    print(f"[INSTALL] Instalando torch=={expected_version} ...")
     try:
         subprocess.check_call([
             python_exec, "-m", "pip", "install",
@@ -125,11 +125,11 @@ def install_torch_tolerant(expected_version: str):
             "--prefer-binary"
         ])
         import torch  # noqa
-        print("✅ torch instalado correctamente.\n")
+        print("[OK] torch instalado correctamente.\n")
     except Exception:
         print(
-            "❌ No se pudo instalar torch correctamente.\n"
-            "👉 Recomendación profesional: Python 3.11 / 3.12 para RL estable.\n"
+            "[ERR] No se pudo instalar torch correctamente.\n"
+            "[INFO] Recomendación profesional: Python 3.11 / 3.12 para RL estable.\n"
         )
 
 
@@ -138,8 +138,8 @@ def install_torch_tolerant(expected_version: str):
 # ------------------------------------------------
 def main():
     print("========================================")
-    print("🚀 Instalación dependencias POC 2 (Santander – NTT Data)")
-    print(f"🐍 Python: {sys.version}")
+    print("[START] Instalación dependencias POC 2 (Santander – NTT Data)")
+    print(f"[PYTHON] Python: {sys.version}")
     print("========================================\n")
 
     for pkg, version in requirements.items():
@@ -150,29 +150,29 @@ def main():
         if not is_installed(pkg, version):
             install(pkg, version)
 
-    print("\n🎯 Dependencias instaladas / verificadas.\n")
+    print("\n[DONE] Dependencias instaladas / verificadas.\n")
 
     # Validación Excel
     try:
         import openpyxl  # noqa
-        print("✅ Validación Excel: openpyxl OK.")
+        print("[OK] Validación Excel: openpyxl OK.")
     except Exception as e:
-        print(f"❌ openpyxl fallo tras instalación ({e})")
+        print(f"[ERR] openpyxl fallo tras instalación ({e})")
 
     # Validación RL (incluye progress bar)
     try:
         import gymnasium, stable_baselines3, tqdm, rich  # noqa
-        print("✅ Validación RL: gymnasium + SB3 + progress bar OK.")
+        print("[OK] Validación RL: gymnasium + SB3 + progress bar OK.")
     except Exception as e:
-        print(f"⚠️  Validación RL incompleta ({e})")
+        print(f"[WARN]  Validación RL incompleta ({e})")
 
     # Validación Parquet
     try:
         import pandas as pd
         pd.DataFrame({"test": [1]}).to_parquet("_test.parquet")
-        print("✅ Validación Parquet OK.")
+        print("[OK] Validación Parquet OK.")
     except Exception as e:
-        print(f"⚠️  Validación Parquet falló ({e})")
+        print(f"[WARN]  Validación Parquet falló ({e})")
     finally:
         if os.path.exists("_test.parquet"):
             os.remove("_test.parquet")
