@@ -146,13 +146,20 @@ def main():
             # We don't copy data files to pack usually (too big/sensitive), but we hash them
             manifest["data_checksums"][d_file] = calculate_file_hash(src)
 
-    # 4b. Runbook
+    # 4b. Runbook & Memo
     runbook_path = os.path.join(ROOT_DIR, "RUNBOOK_COMMITTEE.md")
     if os.path.exists(runbook_path):
         shutil.copy2(runbook_path, pack_dir)
         manifest["artifacts"].append("RUNBOOK_COMMITTEE.md")
     else:
         logger.warning(f"RUNBOOK_COMMITTEE.md not found at {runbook_path}")
+
+    memo_path = os.path.join(ROOT_DIR, "reports", "MEMO_COMMITTEE.md")
+    if os.path.exists(memo_path):
+        shutil.copy2(memo_path, pack_dir)
+        manifest["artifacts"].append("MEMO_COMMITTEE.md")
+    else:
+        logger.warning(f"MEMO_COMMITTEE.md not found at {memo_path}")
 
     # 5. RL Artifacts (Latest per posture)
     postures = ["prudencial", "balanceado", "desinversion"]
