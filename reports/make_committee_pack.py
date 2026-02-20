@@ -161,6 +161,14 @@ def main():
     else:
         logger.warning(f"MEMO_COMMITTEE.md not found at {memo_path}")
 
+    # Checklist
+    checklist_path = os.path.join(ROOT_DIR, "CHECKLIST_COMMITTEE.md")
+    if os.path.exists(checklist_path):
+        shutil.copy2(checklist_path, pack_dir)
+        manifest["artifacts"].append("CHECKLIST_COMMITTEE.md")
+    else:
+        logger.warning(f"CHECKLIST_COMMITTEE.md not found at {checklist_path}")
+
     # 5. RL Artifacts (Latest per posture)
     postures = ["prudencial", "balanceado", "desinversion"]
     for posture in postures:
