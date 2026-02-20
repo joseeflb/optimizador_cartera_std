@@ -421,6 +421,13 @@ def simulate_npl_price(
     total_cost_tx = float(sell_tx_cost + sell_admin_cost)
     precio_neto = float(max(0.0, precio_bruto - total_cost_tx))
 
+    # Global bid haircut for stress scenario pricing_crunch.
+    # stress_engine sets cfg.BID_HAIRCUT_GLOBAL before calling run_coordinator_inference.
+    _bid_haircut = float(getattr(cfg, "BID_HAIRCUT_GLOBAL", 1.0))
+    if _bid_haircut > 1.0:
+        precio_neto = float(precio_neto / _bid_haircut)
+        precio_bruto = float(precio_bruto / _bid_haircut)
+
     # -------------------------
     # Anti-arbitraje (cuando book no viene informado)
     # -------------------------

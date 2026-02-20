@@ -211,7 +211,37 @@ def main():
                         break  # Only first xlsx per posture is enough
                 break  # Only top-level (one level deep)  
 
-    # 8. Manifest
+    # 8. Reproducibility artefacts: scenarios YAML, ingesta, mapping
+    repro_files = [
+        (os.path.join(ROOT_DIR, "configs", "stress_scenarios.yaml"), "stress_scenarios.yaml"),
+        (os.path.join(ROOT_DIR, "data", "mappings", "real_portfolio_mapping.yaml"), "real_portfolio_mapping.yaml"),
+        (os.path.join(ROOT_DIR, "data", "ingest_portfolio.py"), "ingest_portfolio.py"),
+        (os.path.join(ROOT_DIR, "MEMO_COMMITTEE.md"), "MEMO_COMMITTEE.md"),
+        (os.path.join(ROOT_DIR, "RUNBOOK_COMMITTEE.md"), "RUNBOOK_COMMITTEE.md"),
+    ]
+    for src_path, dest_name in repro_files:
+        if os.path.exists(src_path):
+            shutil.copy2(src_path, os.path.join(pack_dir, dest_name))
+            manifest["artifacts"].append(dest_name)
+
+    # 9. Most recent ci_local log (for this tag or any pc9_final log)
+    log_patterns = [
+        os.path.join(ROOT_DIR, "logs", f"ci_local_{args.tag}_*.log"),
+        os.path.join(ROOT_DIR, "logs", "ci_local_pc9_final_*.log"),
+    ]
+    ci_log_src = None
+    for pat in log_patterns:
+        matches = sorted(glob.glob(pat), key=os.path.getmtime, reverse=True)
+        if matches:
+            ci_log_src = matches[0]
+            break
+    if ci_log_src:
+        dest_log = os.path.join(pack_dir, os.path.basename(ci_log_src))
+        shutil.copy2(ci_log_src, dest_log)
+        manifest["artifacts"].append(os.path.basename(ci_log_src))
+        logger.info(f"Included CI log: {ci_log_src}")
+
+    # 10. Manifest
     with open(os.path.join(pack_dir, "MANIFEST.json"), "w") as f:
         json.dump(manifest, f, indent=4)
         

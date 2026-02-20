@@ -25,6 +25,8 @@ scenarios:
       interest_rate_add: 0.02 # +200bps (if variable)
 
   pricing_crunch:
-    description: "Liquidity crisis. Fire-sale prices collapse."
+    description: "Liquidity crisis. Fire-sale prices collapse. bid_haircut_mult is injected
+      into cfg.BID_HAIRCUT_GLOBAL before coordinator_inference, so price_simulator
+      computes 30% lower NPL prices, triggering fewer sales and fire-sale guardrails."
     shocks:
-      bid_haircut_mult: 1.3 # 30% deeper haircuts on NPL pricing logic
+      bid_haircut_mult: 1.3 # 30% deeper haircuts on NPL pricing logic (operative via cfg.BID_HAIRCUT_GLOBAL)

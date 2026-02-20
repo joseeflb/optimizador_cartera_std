@@ -74,6 +74,8 @@ if not exist "reports\stress_summary_%TAG%.csv" (
     exit /b 1
 )
 echo [OK] Stress summary: reports\stress_summary_%TAG%.csv >> %LOGFILE%
+:: Warn if pricing_crunch rows are identical to baseline (would indicate no-op pricing shock)
+powershell -Command "try { $df=Import-Csv 'reports\stress_summary_%TAG%.csv'; $bl=($df | Where-Object {$_.scenario -eq 'baseline'} | Measure-Object -Property n_sales -Sum).Sum; $pc=($df | Where-Object {$_.scenario -eq 'pricing_crunch'} | Measure-Object -Property n_sales -Sum).Sum; if($bl -eq $pc){Write-Output '[WARNING] pricing_crunch n_sales identical to baseline - BID_HAIRCUT_GLOBAL may not be applied'}else{Write-Output '[OK] pricing_crunch differs from baseline (pricing shock operative)'} } catch { Write-Output '[SKIP] Could not compare pricing_crunch vs baseline' }" >> %LOGFILE% 2>&1
 
 echo [INFO] Running backtesting light... >> %LOGFILE% 
 python -m reports.backtesting_light --tag %TAG% --stress-scenarios configs/stress_scenarios.yaml >> %LOGFILE% 2>&1

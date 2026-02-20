@@ -33,6 +33,9 @@ ALLOW_LEGACY_PORTFOLIO_LOAD = False
 # Permitir clipping silencioso en ingestion/stress (si False, lanza ValueError)
 ALLOW_CLIP_OUT_OF_RANGE = False
 STRICT_CONTRACT_VALIDATION: bool = True  # True (Fail), False (Warn)
+# Multiplicador de haircut global para price_simulator (pricing_crunch stress scenario).
+# 1.0 = sin haircut adicional. stress_engine lo sobreescribe temporalmente.
+BID_HAIRCUT_GLOBAL: float = 1.0
 # ================================================================
 #  GUARDRAILS (Hard Constraints Bank-Ready)
 # ================================================================

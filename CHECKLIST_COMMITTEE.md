@@ -47,7 +47,25 @@ This checklist certifies that the delivered "Committee Pack" meets all regulator
 - [ ] **Calibration**: Pricing models (LGD/Haircuts) pending final calibration with Risk Dept.
 - [ ] **Macro Horizon**: Current optimization is single-step (12-24m forward view).
 
+## 6. Robustness under Stress (PC9)
+- [x] **Stress Engine (Multi-Scenario)**: `engines/stress_engine.py` re-runs inference under 4 macro scenarios
+      (baseline, mild, severe, pricing_crunch) x 3 postures (12 runs). KPIs verified to be non-zero.
+- [x] **Backtesting Light**: `reports/backtesting_light.py` re-applies shocks to frozen decisions.
+      Posture differentiation confirmed: prudencial 445/500 on-book, desinversion 92/500 on-book.
+- [x] **Monotonicity under Stress**: EVA and capital_release degrade coherently under mild/severe.
+- [x] **pricing_crunch not a no-op**: `cfg.BID_HAIRCUT_GLOBAL` injected before coordinator_inference;
+      price_simulator applies 30% NPL price haircut; test `test_stress_pricing_crunch_effect.py` validates effect.
+- [x] **Strict Ingestion (Bank-Ready)**: `ALLOW_CLIP_OUT_OF_RANGE=False` by default; negative test
+      (PD=1.5) confirmed raises `ValueError` within < 1s.
+- [x] **No Silent Legacy Fallback**: `ALLOW_LEGACY_PORTFOLIO_LOAD=False`; coordinator aborts with
+      actionable message if ingestion fails.
+- [x] **QA Evidence PC9**: `logs/qa_checkpoint9_evidence.txt` produced with artifact paths, CSV extracts,
+      pytest output, and CI log reference.
+- [x] **Committee Pack Updated**: `make_committee_pack.py` now includes `stress_scenarios.yaml`,
+      `real_portfolio_mapping.yaml`, `ingest_portfolio.py`, `MEMO_COMMITTEE.md`, and CI log.
+
 ---
 **Sign-off**:
 [ ] Validated by Data Science Lead
+[ ] Validated by Risk/Quantitative Model team (PC9 stress scenarios)
 [ ] Ready for Model Validation (Internal Audit)

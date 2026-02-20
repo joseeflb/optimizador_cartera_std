@@ -204,21 +204,28 @@ def run_stress_pipeline(tag: str, portfolio_path: str, scenarios_yaml: str, post
                            model_micro = os.path.join(ROOT_DIR, "models", "checkpoints", zips[0])
                            # model_micro = model_micro.replace(".zip", "") # Removed: coordinator checks exact file existence
 
+                 # Inject bid_haircut_mult for pricing_crunch scenario into price_simulator
+                 _haircut = float(shocks.get("bid_haircut_mult", 1.0))
+                 cfg.BID_HAIRCUT_GLOBAL = _haircut
+
                  # Execute
-                 out_dir, excel_path = run_coordinator_inference(
-                    model_micro=model_micro,
-                    portfolio_path=stressed_port_path, # Shocked portfolio
-                    vecnorm_micro_path=None,
-                    model_macro=None,
-                    risk_posture=posture,
-                    n_steps=5, # Short steps for stress
-                    top_k=5,
-                    tag=f"{tag}_{sc_name}",
-                    base_output_dir=run_output_dir,
-                    device="cpu", # Force CPU for stability in batch
-                    # Defaults for others
-                    export_audit_csv=True
-                )
+                 try:
+                     out_dir, excel_path = run_coordinator_inference(
+                        model_micro=model_micro,
+                        portfolio_path=stressed_port_path, # Shocked portfolio
+                        vecnorm_micro_path=None,
+                        model_macro=None,
+                        risk_posture=posture,
+                        n_steps=5, # Short steps for stress
+                        top_k=5,
+                        tag=f"{tag}_{sc_name}",
+                        base_output_dir=run_output_dir,
+                        device="cpu", # Force CPU for stability in batch
+                        # Defaults for others
+                        export_audit_csv=True
+                     )
+                 finally:
+                     cfg.BID_HAIRCUT_GLOBAL = 1.0  # Always reset to neutral
                 
                  # Check results
                  if excel_path and os.path.exists(excel_path):
