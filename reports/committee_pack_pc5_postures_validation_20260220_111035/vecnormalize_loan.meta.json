@@ -1,0 +1,9 @@
+{
+    "env_tag": "loan",
+    "vn_path": "vecnormalize_loan.pkl",
+    "obs_dim": 10,
+    "obs_feature_order_file": "models/obs_feature_order_loan.json",
+    "obs_feature_order_sha256": "6fa1002c6b003908aec302818dc437725b0884ab0a4df2a41e85b0570e483d25",
+    "numpy_version": "2.4.2",
+    "timestamp": "2026-02-19 22:52:29"
+}

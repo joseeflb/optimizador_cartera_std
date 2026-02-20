@@ -60,3 +60,10 @@ Contiene:
 - `run_<posture>/`: Excel de decisiones y logs para cada estrategia.
 - `evaluation_report.md`: Resumen ejecutivo de impacto financiero.
 - `config.py`: Snapshot de la configuración utilizada.
+
+## Verified on
+
+- **Date**: 2026-02-20
+- **Commit**: 2789976d57d77920f6bd0ade3f0bd1a6e2c17ea3
+- **Tag**: pc5_postures_validation
+

@@ -1,0 +1,69 @@
+{
+  "pipeline": "PPO-NPL-STD",
+  "env_type": "loan",
+  "env_tag": "loan",
+  "scenario": "baseline",
+  "seed": 42,
+  "timesteps_target": 20000,
+  "n_envs": 4,
+  "n_steps": 2048,
+  "batch_size": 64,
+  "gamma": 0.99,
+  "gae_lambda": 0.95,
+  "ent_coef": 0.0,
+  "vf_coef": 0.5,
+  "clip_range": 0.2,
+  "learning_rate": 0.0003,
+  "max_grad_norm": 0.5,
+  "policy_hidden": [
+    128,
+    128
+  ],
+  "activation_fn": "tanh",
+  "obs_space_shape": "(10,)",
+  "feature_names": [],
+  "normalization": {
+    "norm_obs": true,
+    "norm_reward_train": true
+  },
+  "early_stop": {
+    "eval_every": 10000,
+    "eval_episodes": 8,
+    "patience_evals": 3,
+    "cap_weight": 0.5,
+    "scale_mm": 1000000.0,
+    "blocked_weight": 0.1,
+    "conc_weight": 0.05,
+    "vol_weight": 0.05
+  },
+  "micro_obs_order": [
+    "EAD",
+    "PD",
+    "LGD",
+    "RW",
+    "EVA",
+    "RONA",
+    "RORWA",
+    "rating_num",
+    "segmento_id",
+    "DPD/30"
+  ],
+  "portfolio_top_k": 5,
+  "micro_reranking": false,
+  "micro_model_path": "",
+  "micro_vecnorm_path": "",
+  "portfolio_input": {
+    "path": "data/portfolio_synth.xlsx",
+    "sha256": "ab536a592f12ad3e44b733ec8647d46a3c8ce72bc78e2e3e70cf4061d31065fd",
+    "n_rows": 500,
+    "n_cols": 34
+  },
+  "artifacts": {
+    "best_model_path": "C:\\Users\\EV543NB\\OneDrive - EY\\Desktop\\optimizador_cartera_std\\models\\best_model_loan.zip",
+    "last_model_path": "C:\\Users\\EV543NB\\OneDrive - EY\\Desktop\\optimizador_cartera_std\\models\\last_model_loan.zip",
+    "vecnormalize_final_path": "C:\\Users\\EV543NB\\OneDrive - EY\\Desktop\\optimizador_cartera_std\\models\\vecnormalize_loan.pkl",
+    "checkpoints_dir": "C:\\Users\\EV543NB\\OneDrive - EY\\Desktop\\optimizador_cartera_std\\models\\checkpoints\\loan",
+    "metadata_path": "C:\\Users\\EV543NB\\OneDrive - EY\\Desktop\\optimizador_cartera_std\\models\\training_metadata_loan.json",
+    "best_vecnormalize_path": "C:\\Users\\EV543NB\\OneDrive - EY\\Desktop\\optimizador_cartera_std\\models\\best_model_loan_vecnormalize.pkl"
+  }
+}

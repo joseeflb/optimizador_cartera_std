@@ -1,0 +1,60 @@
+{
+    "timestamp": "20260220_111035",
+    "tag": "pc5_postures_validation",
+    "git": {
+        "commit": "2789976d57d77920f6bd0ade3f0bd1a6e2c17ea3",
+        "status": "dirty"
+    },
+    "python_executable": "C:\\Users\\EV543NB\\OneDrive - EY\\Desktop\\optimizador_cartera_std\\.venv\\Scripts\\python.exe",
+    "python_version": "3.14.3 (tags/v3.14.3:323c59a, Feb  3 2026, 16:04:56) [MSC v.1944 64 bit (AMD64)]",
+    "environment": {
+        "pip_freeze": "pip_freeze.txt"
+    },
+    "models_checksums": {
+        "best_model_loan.zip": "368e552fbee8de737f323febf000eb0c9e2ceedec172d391c1d49b697978f535",
+        "best_model_portfolio.zip": "f8f558cfd8002cbbb8a50c1a84776ee1af749c952e3a3f8765ca9d8b7aefa6be",
+        "vecnormalize_loan.pkl": "7990eee2c8e3ad793ea24368fed0659b2fd12136c79a98ab5fe3c6b18421e082",
+        "vecnormalize_loan.meta.json": "35e784e7597102762714e64730a5de27ef028e9c3996c7eb5e4e641442536ab0",
+        "training_metadata_loan.json": "7bdd64b61b15b57d75f8b172482fa21f38529cca90b1d66db312443abf74e4b4",
+        "obs_feature_order_loan.json": "6fa1002c6b003908aec302818dc437725b0884ab0a4df2a41e85b0570e483d25"
+    },
+    "data_checksums": {
+        "portfolio_synth.xlsx": "ab536a592f12ad3e44b733ec8647d46a3c8ce72bc78e2e3e70cf4061d31065fd",
+        "portfolio_synth_smoke.xlsx": "b358274c5029ac5ed58c1431ab06ca6be3e9270dfb5cbc6557c39333aab86f0e"
+    },
+    "artifacts": [
+        "config.py",
+        "best_model_loan.zip",
+        "best_model_portfolio.zip",
+        "vecnormalize_loan.pkl",
+        "vecnormalize_loan.meta.json",
+        "training_metadata_loan.json",
+        "obs_feature_order_loan.json",
+        "config.py",
+        "run_prudencial/portfolio_kpis_prudencial.json",
+        "run_prudencial/overrides_log_prudencial.csv",
+        "run_prudencial/decisiones_finales_prudencial.xlsx",
+        "run_balanceado/portfolio_kpis_balanceado.json",
+        "run_balanceado/overrides_log_balanceado.csv",
+        "run_balanceado/decisiones_finales_balanceado.xlsx",
+        "run_desinversion/portfolio_kpis_desinversion.json",
+        "run_desinversion/overrides_log_desinversion.csv",
+        "run_desinversion/decisiones_finales_desinversion.xlsx",
+        "compare_postures_pc5_postures_validation.csv",
+        "evaluation_pc6.csv",
+        "evaluation_report.md",
+        "qa_checkpoint5_evidence.txt",
+        "qa_checkpoint6_evidence.txt"
+    ],
+    "config_snapshot": {
+        "COORDINATOR_PRIORITY": "PRUDENCIAL_FIRST",
+        "STRICT_CONTRACT_VALIDATION": true,
+        "GUARDRAILS": {
+            "GR_PTI_MAX": 0.45,
+            "GR_DSCR_MIN": 1.1,
+            "GR_SELL_MIN_BID_PCT_EAD": 0.05,
+            "GR_SELL_MAX_FIRE_SALE_LOSS_PCT_EAD_PRUDENCIAL": 0.4,
+            "GR_SELL_MIN_CAPITAL_RELEASE": 0.0
+        }
+    }
+}

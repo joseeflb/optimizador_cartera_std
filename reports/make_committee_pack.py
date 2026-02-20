@@ -97,7 +97,54 @@ def main():
     except Exception as e:
         logger.error(f"Failed to generate pip freeze: {e}")
 
-    # 2. Config Snapshot
+    # 2. Config Snapshot (Extended for Audit)
+    try:
+        sys.path.append(ROOT_DIR)
+        import config
+        
+        # Extract critical config values
+        manifest["config_snapshot"] = {
+            "COORDINATOR_PRIORITY": getattr(config, "COORDINATOR_PRIORITY", "N/A"),
+            "STRICT_CONTRACT_VALIDATION": getattr(config, "STRICT_CONTRACT_VALIDATION", "N/A"),
+            "GUARDRAILS": {k: v for k, v in config.__dict__.items() if k.startswith("GR_")}
+        }
+        
+        # Copy config.py
+        shutil.copy(os.path.join(ROOT_DIR, "config.py"), os.path.join(pack_dir, "config.py"))
+        manifest["artifacts"].append("config.py")
+    except Exception as e:
+        logger.error(f"Failed to snapshot config: {e}")
+
+    # 3. Models and Checksums
+    models_dir = os.path.join(ROOT_DIR, "models")
+    model_files = [
+        "best_model_loan.zip",
+        "best_model_portfolio.zip",
+        "vecnormalize_loan.pkl",
+        "vecnormalize_loan.meta.json",
+        "training_metadata_loan.json",
+        "obs_feature_order_loan.json"
+    ]
+    
+    for m_file in model_files:
+        src = os.path.join(models_dir, m_file)
+        if os.path.exists(src):
+            dst = os.path.join(pack_dir, m_file)
+            shutil.copy(src, dst)
+            manifest["models_checksums"][m_file] = calculate_file_hash(src)
+            manifest["artifacts"].append(m_file)
+        else:
+            logger.warning(f"Model file not found: {m_file}")
+
+    # 4. Data Checksums
+    data_dir = os.path.join(ROOT_DIR, "data")
+    data_files = ["portfolio_synth.xlsx", "portfolio_synth_smoke.xlsx"]
+    
+    for d_file in data_files:
+        src = os.path.join(data_dir, d_file)
+        if os.path.exists(src):
+            # We don't copy data files to pack usually (too big/sensitive), but we hash them
+            manifest["data_checksums"][d_file] = calculate_file_hash(src)
     config_src = os.path.join(ROOT_DIR, "config.py")
     if os.path.exists(config_src):
         shutil.copy2(config_src, pack_dir)
