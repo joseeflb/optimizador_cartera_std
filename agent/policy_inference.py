@@ -37,6 +37,13 @@ import pandas as pd
 
 import config as cfg
 
+try:
+    from data.ingest_portfolio import load_and_validate_portfolio
+except ImportError:
+    # Fallback dummy
+    def load_and_validate_portfolio(path):
+        raise ImportError("Module data.ingest_portfolio missing")
+
 # --- Schema enforcement (columnas estables bank-ready) ---
 try:
     from reports.schema import enforce_schema  # type: ignore
@@ -551,9 +558,15 @@ def load_portfolio_any(path: str) -> pd.DataFrame:
     if not os.path.exists(path):
         raise FileNotFoundError(f"❌ Cartera no encontrada: {path}")
 
-    ext = os.path.splitext(path.lower())[1]
-    df = pd.read_excel(path) if ext in (".xlsx", ".xls") else pd.read_csv(path)
-    df.columns = [c.strip() for c in df.columns]
+    try:
+        # Intento de ingesta robusta (detecta formato, aplica mapping global, valida nulos/tipos)
+        df = load_and_validate_portfolio(path)
+    except Exception:
+        # Fallback a lectura simple si falla ingestion
+        ext = os.path.splitext(path.lower())[1]
+        df = pd.read_excel(path) if ext in (".xlsx", ".xls") else pd.read_csv(path)
+    
+    df.columns = [str(c).strip() for c in df.columns]
 
     # -----------------------------------------------------------
     # 🔒 INPUT SCHEMA LOCK (Contract Check)

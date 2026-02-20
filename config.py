@@ -27,8 +27,11 @@ from pathlib import Path
 
 # ================================================================
 # � Validación (Modo estricto vs tolerante)
-# ================================================================
-STRICT_CONTRACT_VALIDATION: bool = True  # True (Fail), False (Warn)
+# ================================================================# Habilitar fallback a legacy Excel loader si ingest_portfolio falla (NO RECOMENDADO en PROD)
+ALLOW_LEGACY_PORTFOLIO_LOAD = False 
+
+# Permitir clipping silencioso en ingestion/stress (si False, lanza ValueError)
+ALLOW_CLIP_OUT_OF_RANGE = FalseSTRICT_CONTRACT_VALIDATION: bool = True  # True (Fail), False (Warn)
 # ================================================================
 #  GUARDRAILS (Hard Constraints Bank-Ready)
 # ================================================================

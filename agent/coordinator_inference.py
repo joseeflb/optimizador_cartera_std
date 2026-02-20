@@ -42,6 +42,13 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.append(ROOT_DIR)
 
+try:
+    from data.ingest_portfolio import load_and_validate_portfolio
+except ImportError:
+    # Fallback si no existe modulo data (dev environment issue)
+    def load_and_validate_portfolio(path):
+        raise ImportError("No data.ingest_portfolio module found")
+
 DATA_DIR = os.path.join(ROOT_DIR, "data")
 MODELS_DIR = os.path.join(ROOT_DIR, "models")
 REPORTS_DIR = os.path.join(ROOT_DIR, "reports")
@@ -500,15 +507,25 @@ def _load_portfolio_df(portfolio_path: str) -> pd.DataFrame:
     if not os.path.exists(portfolio_path):
         return pd.DataFrame()
 
-    ext = os.path.splitext(portfolio_path)[1].lower()
     try:
-        if ext in (".xlsx", ".xls"):
-            dfp = pd.read_excel(portfolio_path)
-        else:
-            dfp = pd.read_csv(portfolio_path)
+        # Intento de ingesta robusta (detecta formato, aplica mapping global, valida nulos/tipos)
+        dfp = load_and_validate_portfolio(portfolio_path)
     except Exception as e:
-        logger.warning(f"[WARN] No se pudo leer portfolio para merge defensivo: {e}")
-        return pd.DataFrame()
+        allow_legacy = getattr(cfg, "ALLOW_LEGACY_PORTFOLIO_LOAD", False)
+        if not allow_legacy:
+            logger.error(f"[ERROR] Ingesta robusta fallida: {e}. 'ALLOW_LEGACY_PORTFOLIO_LOAD' es False. Abortando.")
+            raise e
+        
+        logger.warning(f"[WARN] Ingesta robusta fallida ({e}), fallback a lectura directa (Legacy Mode ON).")
+        ext = os.path.splitext(portfolio_path)[1].lower()
+        try:
+            if ext in (".xlsx", ".xls"):
+                dfp = pd.read_excel(portfolio_path)
+            else:
+                dfp = pd.read_csv(portfolio_path)
+        except Exception as e2:
+            logger.warning(f"[WARN] No se pudo leer portfolio para merge defensivo: {e2}")
+            return pd.DataFrame()
 
     dfp = harmonize_portfolio_schema(dfp)
     dfp = _ensure_loan_id_column(dfp)

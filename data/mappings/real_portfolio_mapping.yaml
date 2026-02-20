@@ -1,0 +1,126 @@
+# Mapping configuration from Real Bank Data to Internal Model Schema
+# Keys are internal canonical names. Values are lists of possible source column names.
+# The ingestion process will look for the first match.
+
+column_map:
+  loan_id:
+    - "Loan_ID"
+    - "ID_Prestamo"
+    - "Cod_Operacion"
+    - "Contract_ID"
+    - "id"
+    - "loan_id"
+  
+  segment:
+    - "Segmento_Banco"
+    - "Segment"
+    - "Tipo_Cartera"
+    - "Portfolio_Segment"
+    - "Counterparty_Type"
+    - "segment"
+
+  rating:
+    - "Rating_Interno"
+    - "Rating"
+    - "Calificacion_Crediticia"
+    - "Credit_Grade"
+    - "rating"
+
+  EAD:
+    - "EAD_EUR"
+    - "Exposicion_Default"
+    - "Outstanding_Balance"
+    - "Saldo_Vivo"
+    - "EAD"
+    - "ead"
+
+  PD:
+    - "PD_12m"
+    - "Probabilidad_Default"
+    - "PD_Final"
+    - "PD"
+    - "pd"
+
+  LGD:
+    - "LGD_Downturn"
+    - "LGD_Final"
+    - "Loss_Given_Default"
+    - "LGD"
+    - "lgd"
+
+  RW:
+    - "RWA_Density"
+    - "Risk_Weight"
+    - "Ponderacion_Riesgo"
+    - "RW"
+    - "rw"
+
+  interest_rate:
+    - "Tasa_Interes_Actual"
+    - "Interest_Rate"
+    - "Tipo_Interes"
+    - "Current_Rate"
+    - "interest_rate"
+
+  remaining_term:
+    - "Plazo_Remanente_Meses"
+    - "Remaining_Term"
+    - "Meses_Vencimiento"
+    - "Time_to_Maturity"
+    - "remaining_term"
+
+  collateral_value:
+    - "Valor_Garantia"
+    - "Collateral_Value"
+    - "Garantia_Real"
+    - "Security_Value"
+    - "collateral_value"
+
+  collateral_type:
+    - "Tipo_Garantia"
+    - "Collateral_Type"
+    - "Security_Type"
+    - "collateral_type"
+
+  DPD:
+    - "Dias_Atraso"
+    - "DPD"
+    - "Days_Past_Due"
+    - "Mora"
+    - "dpd"
+
+  currency:
+    - "Moneda"
+    - "Currency"
+    - "Divisa"
+    - "currency"
+
+# Default values if columns are missing
+defaults:
+  currency: "EUR"
+  RW: 1.0  # Default 100% RW if missing
+  DPD: 90
+  remaining_term: 12
+  interest_rate: 0.05
+  collateral_value: 0.0
+  segment: "CORPORATE"
+  rating: "CCC"  # Default to high risk if unknown
+
+# Validation rules
+validation:
+  required_columns:
+    - "loan_id"
+    - "EAD"
+  
+  constraints:
+    EAD:
+      min: 0.01
+    PD:
+      min: 0.0
+      max: 1.0
+    LGD:
+      min: 0.0
+      max: 1.0
+    RW:
+      min: 0.0
+      max: 20.0  # 2000% max

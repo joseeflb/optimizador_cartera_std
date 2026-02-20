@@ -3,13 +3,13 @@ setlocal enabledelayedexpansion
 :: ==========================================
 :: CI LOCAL (Continuous Integration Substitute)
 :: ==========================================
-:: Ejecuta el pipeline completo de validación y empaquetado.
+:: Ejecuta el pipeline completo de validaciï¿½n y empaquetado.
 :: Uso: .\ci_local.bat [TAG]
 ::
 :: Ejemplo: .\ci_local.bat pc8_prep
 :: ==========================================
 
-:: 1. Configuración
+:: 1. Configuraciï¿½n
 if "%1"=="" (
     set TAG=pc5_postures_validation
 ) else (
@@ -52,6 +52,21 @@ echo [INFO] Running run_3_postures_executability_venv.bat --tag %TAG% >> %LOGFIL
 call .\run_3_postures_executability_venv.bat --tag %TAG% >> %LOGFILE% 2>&1
 if %errorlevel% neq 0 (
     echo [ERROR] Postures inference failed. See %LOGFILE%
+    exit /b 1
+)
+
+echo [%time%] 3.5. Running Stress & Sensitivities (PC9)...
+echo [INFO] Running stress engine... >> %LOGFILE%
+python -m engines.stress_engine --tag %TAG% --portfolio data/portfolio_synth.xlsx --scenarios configs/stress_scenarios.yaml >> %LOGFILE% 2>&1
+if !errorlevel! neq 0 (
+    echo [ERROR] Stress Engine failed. See %LOGFILE%
+    exit /b 1
+)
+
+echo [INFO] Running backtesting light... >> %LOGFILE% 
+python -m reports.backtesting_light --tag %TAG% --stress-scenarios configs/stress_scenarios.yaml >> %LOGFILE% 2>&1
+if !errorlevel! neq 0 (
+    echo [ERROR] Backtesting Light failed. See %LOGFILE%
     exit /b 1
 )
 
