@@ -28,6 +28,12 @@ logs/
 _tmp/*
 !_tmp/**/*.py
 !_tmp/**/*.md
+
+# =========================
+# Reports / Committee Packs
+# =========================
+reports/committee_pack_*/
+
 _tmp/backup/
 
 # =========================

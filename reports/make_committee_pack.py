@@ -145,12 +145,16 @@ def main():
         if os.path.exists(src):
             # We don't copy data files to pack usually (too big/sensitive), but we hash them
             manifest["data_checksums"][d_file] = calculate_file_hash(src)
-    config_src = os.path.join(ROOT_DIR, "config.py")
-    if os.path.exists(config_src):
-        shutil.copy2(config_src, pack_dir)
-        manifest["artifacts"].append("config.py")
 
-    # 3. RL Artifacts (Latest per posture)
+    # 4b. Runbook
+    runbook_path = os.path.join(ROOT_DIR, "RUNBOOK_COMMITTEE.md")
+    if os.path.exists(runbook_path):
+        shutil.copy2(runbook_path, pack_dir)
+        manifest["artifacts"].append("RUNBOOK_COMMITTEE.md")
+    else:
+        logger.warning(f"RUNBOOK_COMMITTEE.md not found at {runbook_path}")
+
+    # 5. RL Artifacts (Latest per posture)
     postures = ["prudencial", "balanceado", "desinversion"]
     for posture in postures:
         folder = find_latest_run_folder(args.tag, posture)
@@ -240,31 +244,23 @@ def main():
         else:
             logger.warning(f"⚠️ Log not found: {l_file}")
 
-    # 6. Checksums (Models & Data)
-    models_dir = os.path.join(ROOT_DIR, "models")
-    model_files = [
-        os.path.join(models_dir, "checkpoints", "best_model_loan.zip"),
-        os.path.join(models_dir, "vecnormalize_loan.pkl"),
-        os.path.join(models_dir, "vecnormalize_loan.meta.json"),
-        os.path.join(models_dir, "checkpoints", "best_model_portfolio.zip") 
-    ]
+    # 6. Checksums (Validation & Cleanup)
+    # (Models and Data Checksums are already handled in previous sections)
     
-    for m_path in model_files:
-        if os.path.exists(m_path):
-            h = calculate_file_hash(m_path)
-            manifest["models_checksums"][os.path.basename(m_path)] = h
-    
-    # Data Data Checksum
-    data_files = [
-        os.path.join(ROOT_DIR, "data", "portfolio_synth.xlsx"),
-        os.path.join(ROOT_DIR, "data", "portfolio_synth_smoke.xlsx")
-    ]
-    for d_path in data_files:
-        if os.path.exists(d_path):
-            h = calculate_file_hash(d_path)
-            manifest["data_checksums"][os.path.basename(d_path)] = h
+    # Check if artifacts list matches reality or needs deduplication
+    manifest["artifacts"] = sorted(list(set(manifest["artifacts"])))
 
-    # 7. Write Manifest
+    # 7. Generate Outputs List (Recursive)
+    outputs_list = []
+    for root, dirs, files in os.walk(pack_dir):
+        for file in files:
+            abs_path = os.path.join(root, file)
+            rel_path = os.path.relpath(abs_path, pack_dir)
+            outputs_list.append(rel_path.replace("\\", "/"))
+            
+    manifest["outputs_list"] = sorted(outputs_list)
+
+    # 8. Write Manifest
     manifest_path = os.path.join(pack_dir, "MANIFEST.json")
     with open(manifest_path, "w", encoding="utf-8") as f:
         json.dump(manifest, f, indent=4)
