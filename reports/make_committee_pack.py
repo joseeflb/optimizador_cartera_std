@@ -128,6 +128,17 @@ def main():
         logger.info(f"Included stress summary: {stress_sum}")
     else:
         logger.warning(f"Stress summary not found: {stress_sum}")
+
+    # Also include pricing_only stress summary if it exists (pricing_crunch fix verification)
+    pricing_only_sum = os.path.join(ROOT_DIR, "reports", f"stress_summary_{args.tag}_pricing_only.csv")
+    if not os.path.exists(pricing_only_sum):
+        # Try canonical naming: stress_summary_pc9_pricing_only_postfix.csv -> strip trailing _postfix variant
+        base_tag = args.tag.replace("_postfix", "").replace("_final", "")
+        pricing_only_sum = os.path.join(ROOT_DIR, "reports", f"stress_summary_{base_tag}_pricing_only.csv")
+    if os.path.exists(pricing_only_sum):
+        shutil.copy2(pricing_only_sum, pack_dir)
+        manifest["artifacts"].append(os.path.basename(pricing_only_sum))
+        logger.info(f"Included pricing_only stress summary: {pricing_only_sum}")
         
     backtest_csv = os.path.join(ROOT_DIR, "reports", f"backtesting_light_{args.tag}.csv")
     if os.path.exists(backtest_csv):
@@ -199,13 +210,13 @@ def main():
             run_src = candidates[0]
 
         pack_posture_dir = os.path.join(pack_dir, f"run_{posture}")
-        os.makedirs(pack_posture_dir, exist_ok=True)
         if run_src:
-            # Copy Excel decision files
+            # Copy Excel decision files — only create folder if we have something to copy
             for root_w, dirs_w, files_w in os.walk(run_src):
                 for fname in files_w:
                     if fname.endswith(".xlsx"):
                         src_f = os.path.join(root_w, fname)
+                        os.makedirs(pack_posture_dir, exist_ok=True)
                         shutil.copy2(src_f, pack_posture_dir)
                         manifest["artifacts"].append(f"run_{posture}/{fname}")
                         break  # Only first xlsx per posture is enough
@@ -241,7 +252,8 @@ def main():
         manifest["artifacts"].append(os.path.basename(ci_log_src))
         logger.info(f"Included CI log: {ci_log_src}")
 
-    # 10. Manifest
+    # 10. Manifest — deduplicate artifact list preserving order
+    manifest["artifacts"] = list(dict.fromkeys(manifest["artifacts"]))
     with open(os.path.join(pack_dir, "MANIFEST.json"), "w") as f:
         json.dump(manifest, f, indent=4)
         

@@ -1,7 +1,0 @@
-﻿loan_id,level,from_action,to_action,portfolio_context,posture,run_id,macro_action_used,macro_rationales_short,pti_actual,dscr_actual,pnl
-L000100,GUARDRAIL_FIRE_SALE,VENDER,MANTENER,prudencial,prudencial,20260220_144440,,,0.35,,-302215
-L000103,GUARDRAIL_FIRE_SALE,VENDER,MANTENER,prudencial,prudencial,20260220_144440,,,0.31,,-210354
-L000131,GUARDRAIL_FIRE_SALE,VENDER,MANTENER,prudencial,prudencial,20260220_144440,,,0.36,,-208966
-L000161,GUARDRAIL_FIRE_SALE,VENDER,MANTENER,prudencial,prudencial,20260220_144440,,,0.30,,-183275
-L000173,GUARDRAIL_FIRE_SALE,VENDER,MANTENER,prudencial,prudencial,20260220_144440,,,0.36,,-477304
-L000177,GUARDRAIL_FIRE_SALE,VENDER,MANTENER,prudencial,prudencial,20260220_144440,,,0.42,,-241365
