@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 # -----------------------------------------------------------
-# 🔧 Rutas y logging
+# [U1F527] Rutas y logging
 # -----------------------------------------------------------
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
@@ -52,13 +52,13 @@ try:
     from stable_baselines3 import PPO
     from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 except ImportError as e:
-    raise SystemExit("❌ Faltan dependencias RL. Ejecuta install_requirements_smart.py.") from e
+    raise SystemExit("[ERR] Faltan dependencias RL. Ejecuta install_requirements_smart.py.") from e
 
 CFG = cfg.CONFIG
 
 
 # -----------------------------------------------------------
-# 📊 Exportador específico para cartera final
+# [U1F4CA] Exportador específico para cartera final
 # -----------------------------------------------------------
 def export_styled_excel_portfolio(df: pd.DataFrame, out_path: str) -> None:
     from openpyxl import Workbook
@@ -134,7 +134,7 @@ def export_styled_excel_portfolio(df: pd.DataFrame, out_path: str) -> None:
 
 
 # -----------------------------------------------------------
-# 🧾 Config de inferencia macro
+# [U1F9FE] Config de inferencia macro
 # -----------------------------------------------------------
 @dataclass
 class PortfolioInferenceConfig:
@@ -146,7 +146,7 @@ class PortfolioInferenceConfig:
     tag: str = "portfolio_policy"
     n_steps: int = 1
     top_k: int = 5
-    scenario: str = "baseline"  # ✅ baseline | adverse | severe
+    scenario: str = "baseline"  # [OK] baseline | adverse | severe
 
     save_final_excel: bool = True
     risk_posture: str = "balanceado"
@@ -155,14 +155,14 @@ class PortfolioInferenceConfig:
     vecnormalize_portfolio_path: Optional[str] = None
     vecnormalize_loan_path: Optional[str] = None
 
-    # ✅ no crear carpetas ni exports intermedios
+    # [OK] no crear carpetas ni exports intermedios
     persist_outputs: bool = True
     output_dir: Optional[str] = None
     final_output_path: Optional[str] = None
 
 
 # -----------------------------------------------------------
-# 🔧 Utilidades
+# [U1F527] Utilidades
 # -----------------------------------------------------------
 _ACTION_MAP: Dict[int, str] = {
     0: "MANTENER todos",
@@ -254,12 +254,12 @@ def harmonize_portfolio_schema(df: pd.DataFrame) -> pd.DataFrame:
 
 def _load_portfolio_df(path: str) -> pd.DataFrame:
     if not os.path.exists(path):
-        raise FileNotFoundError(f"❌ Cartera no encontrada: {path}")
+        raise FileNotFoundError(f"[ERR] Cartera no encontrada: {path}")
     ext = os.path.splitext(path.lower())[1]
     df = pd.read_excel(path) if ext in (".xlsx", ".xls") else pd.read_csv(path)
     df.columns = [c.strip() for c in df.columns]
 
-    # ✅ Harmonize: crea/normaliza PTI, DSCR, ingreso_mensual, cuota_mensual, book_value, etc.
+    # [OK] Harmonize: crea/normaliza PTI, DSCR, ingreso_mensual, cuota_mensual, book_value, etc.
     df = harmonize_portfolio_schema(df)
 
     # (opcional pero recomendado) sanity log rápido
@@ -267,10 +267,10 @@ def _load_portfolio_df(path: str) -> pd.DataFrame:
         miss_pti = int(df["PTI"].isna().sum()) if "PTI" in df.columns else len(df)
         miss_dscr = int(df["DSCR"].isna().sum()) if "DSCR" in df.columns else len(df)
         logger.info(
-            f"📥 Cartera armonizada ({len(df):,} préstamos) | missing PTI={miss_pti} | missing DSCR={miss_dscr}"
+            f"[U1F4E5] Cartera armonizada ({len(df):,} préstamos) | missing PTI={miss_pti} | missing DSCR={miss_dscr}"
         )
     except Exception:
-        logger.info(f"📥 Cartera armonizada ({len(df):,} préstamos)")
+        logger.info(f"[U1F4E5] Cartera armonizada ({len(df):,} préstamos)")
 
     return df
 
@@ -302,7 +302,7 @@ def _pick_default_micro_model_path() -> Optional[str]:
 
 def _pick_default_vn_portfolio_path() -> Optional[str]:
     """
-    ✅ Ampliado: aceptamos bundles estándar y legacy, y validamos por SHAPE.
+    [OK] Ampliado: aceptamos bundles estándar y legacy, y validamos por SHAPE.
     """
     cands = [
         os.path.join(MODELS_DIR, "vecnormalize_portfolio.pkl"),
@@ -482,9 +482,9 @@ class PolicyAdapter:
 
 def _load_ppo_model(path: str, device: str, label: str) -> PPO:
     if not os.path.exists(path):
-        raise FileNotFoundError(f"❌ Modelo {label} no encontrado: {path}")
+        raise FileNotFoundError(f"[ERR] Modelo {label} no encontrado: {path}")
     device_final = _device_auto(device)
-    logger.info(f"🤖 Cargando PPO {label}: {path} [device={device_final}]")
+    logger.info(f"[U1F916] Cargando PPO {label}: {path} [device={device_final}]")
     return PPO.load(path, device=device_final)
 
 
@@ -502,7 +502,7 @@ def _select_profile_strategy_reward(posture: str):
 
 
 # -----------------------------------------------------------
-# 🧠 CAPA FINANCIERA MACRO (Banco L1.5)
+# [U1F9E0] CAPA FINANCIERA MACRO (Banco L1.5)
 # -----------------------------------------------------------
 def _macro_thresholds_from_strategy(strat: Any, posture: str) -> Dict[str, float]:
     posture = (posture or "balanceado").lower()
@@ -630,28 +630,28 @@ def _macro_financial_action(
 
     if EVA >= EVA_POS_STRONG and est_rorwa >= hurdle + 0.003:
         if hhi_seg < HHI_HIGH and hhi_rat < HHI_HIGH and eva_vol < EVA_VOL_HIGH:
-            rationale.append("Cartera crea valor + diversificación + volatilidad contenida → KEEP.")
+            rationale.append("Cartera crea valor + diversificación + volatilidad contenida -> KEEP.")
             return 0, "KEEP", " ".join(rationale)
-        rationale.append("Cartera buena pero con concentración/volatilidad → MIX táctico.")
+        rationale.append("Cartera buena pero con concentración/volatilidad -> MIX táctico.")
         return 9, "MIX", " ".join(rationale)
 
     if -AMBIG_BAND <= EVA <= AMBIG_BAND:
-        rationale.append("EVA en banda ambigua → PPO decide táctica (con guardrails).")
+        rationale.append("EVA en banda ambigua -> PPO decide táctica (con guardrails).")
         return None, "AMBIG", " ".join(rationale)
 
     if EVA < 0:
         if posture == "prudencial":
-            rationale.append("EVA negativo moderado → preferencia RESTRUCT (4).")
+            rationale.append("EVA negativo moderado -> preferencia RESTRUCT (4).")
             return 4, "RESTRUCT", " ".join(rationale)
-        rationale.append("EVA negativo moderado → baseline (10).")
+        rationale.append("EVA negativo moderado -> baseline (10).")
         return 10, "MIX", " ".join(rationale)
 
-    rationale.append("EVA positivo moderado → PPO refina (KEEP/MIX).")
+    rationale.append("EVA positivo moderado -> PPO refina (KEEP/MIX).")
     return None, "AMBIG", " ".join(rationale)
 
 
 # -----------------------------------------------------------
-# 🚀 Núcleo (con modo no-persist)
+# [U1F680] Núcleo (con modo no-persist)
 # -----------------------------------------------------------
 def _resolve_output_dir(cfg_inf: PortfolioInferenceConfig, ts: str) -> str:
     if cfg_inf.output_dir and str(cfg_inf.output_dir).strip():
@@ -676,28 +676,28 @@ def _run_portfolio_inference_for_posture(
 
     prof, strat, _reward = _select_profile_strategy_reward(posture)
 
-    # ✅ Intentar fijar perfil antes de cargar/reload del env
+    # [OK] Intentar fijar perfil antes de cargar/reload del env
     if hasattr(cfg, "set_bank_profile"):
         try:
             cfg.set_bank_profile(prof)
         except Exception as e:
             logger.warning(f"[WARN] No se pudo fijar bank_profile en config: {e}")
 
-    # ✅ Mitigación: reload del módulo env.portfolio_env para refrescar aliases a nivel de módulo
+    # [OK] Mitigación: reload del módulo env.portfolio_env para refrescar aliases a nivel de módulo
     # (si en tu PortfolioEnv todavía usa BANK_PROFILE/BANK_STRAT como constantes import-time)
     try:
         import env.portfolio_env as portfolio_env_mod  # type: ignore
         portfolio_env_mod = importlib.reload(portfolio_env_mod)
         PortfolioEnv = portfolio_env_mod.PortfolioEnv
     except Exception as e:
-        raise SystemExit(f"❌ No se pudo importar/reload PortfolioEnv: {e}")
+        raise SystemExit(f"[ERR] No se pudo importar/reload PortfolioEnv: {e}")
 
     try:
         import env.loan_env as loan_env_mod  # type: ignore
         loan_env_mod = importlib.reload(loan_env_mod)
         LoanEnv = loan_env_mod.LoanEnv
     except Exception as e:
-        raise SystemExit(f"❌ No se pudo importar/reload LoanEnv: {e}")
+        raise SystemExit(f"[ERR] No se pudo importar/reload LoanEnv: {e}")
 
     reg_cfg = cfg.CONFIG.regulacion
     hurdle = float(getattr(reg_cfg, "hurdle_rate", 0.0))
@@ -744,7 +744,7 @@ def _run_portfolio_inference_for_posture(
 
     step_records: List[Dict[str, Any]] = []
 
-    # ✅ Ledger audit-ready por préstamo (decisión final y racional macro del step)
+    # [OK] Ledger audit-ready por préstamo (decisión final y racional macro del step)
     decision_ledger: Dict[str, Dict[str, Any]] = {}
 
     done = False
@@ -816,7 +816,7 @@ def _run_portfolio_inference_for_posture(
         sold_ids_s = [str(x).strip() for x in sold_ids if str(x).strip()]
         restr_ids_s = [str(x).strip() for x in restructured_ids if str(x).strip()]
 
-        # ✅ ledger: SELL manda; RESTRUCT solo si no vendido
+        # [OK] ledger: SELL manda; RESTRUCT solo si no vendido
         for lid in sold_ids_s:
             prev = decision_ledger.get(lid, {})
             decision_ledger[lid] = {
@@ -903,7 +903,7 @@ def _run_portfolio_inference_for_posture(
     df_final = pd.DataFrame(getattr(env, "portfolio", []))
 
     # -----------------------------
-    # ✅ Enriquecer df_final con “decisión final” audit-ready
+    # [OK] Enriquecer df_final con “decisión final” audit-ready
     # -----------------------------
     if not df_final.empty:
         if "loan_id" in df_final.columns:
@@ -979,7 +979,7 @@ def _run_portfolio_inference_for_posture(
 
     traj_path = os.path.join(out_dir, traj_name)
     df_steps.to_csv(traj_path, index=False, encoding="utf-8-sig")
-    logger.info(f"📈 Trayectoria macro guardada en {traj_path}")
+    logger.info(f"[U1F4C8] Trayectoria macro guardada en {traj_path}")
 
     final_path = _resolve_final_path(cfg_inf, out_dir, final_name)
     if cfg_inf.save_final_excel:
@@ -1146,6 +1146,6 @@ if __name__ == "__main__":
     cfg_inf = parse_args()
     out_dir = run_portfolio_inference(cfg_inf)
     if out_dir:
-        logger.info(f"🏁 Inferencia macro completada. Reporte en carpeta: {out_dir}")
+        logger.info(f"[U1F3C1] Inferencia macro completada. Reporte en carpeta: {out_dir}")
     else:
-        logger.info("🏁 Inferencia macro completada (no-persist).")
+        logger.info("[U1F3C1] Inferencia macro completada (no-persist).")

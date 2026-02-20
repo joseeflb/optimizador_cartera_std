@@ -200,7 +200,7 @@ def consolidate_summaries(source_dir: str) -> pd.DataFrame:
     full["label"] = full["label"].fillna(full["inference_id"].astype(str))
     full.loc[full["label"].astype(str).str.strip().eq(""), "label"] = full["inference_id"].astype(str)
 
-    logger.info(f"📥 Consolidado {len(files)} archivos summary.csv. Filas totales: {len(full)}")
+    logger.info(f"[U1F4E5] Consolidado {len(files)} archivos summary.csv. Filas totales: {len(full)}")
     return full
 
 
@@ -286,7 +286,7 @@ def generate_executive_summary(df: pd.DataFrame, out_txt: str):
         lines.append("No hay datos (no se encontraron summary.csv).")
         with open(out_txt, "w", encoding="utf-8") as f:
             f.write("\n".join(lines))
-        logger.info(f"📝 Executive summary generado (vacío): {out_txt}")
+        logger.info(f"[U1F4DD] Executive summary generado (vacío): {out_txt}")
         return
 
     try:
@@ -356,7 +356,7 @@ def export_outputs(df: pd.DataFrame, save_excel: bool, save_json: bool):
     if save_json:
         out_json = os.path.join(SUMMARY_DIR, "summary_consolidated.json")
         df.to_json(out_json, orient="records", indent=2, force_ascii=False)
-        logger.info(f"💾 JSON consolidado: {out_json}")
+        logger.info(f"[U1F4BE] JSON consolidado: {out_json}")
 
 
 # -----------------------------------------------------------
@@ -392,4 +392,4 @@ if __name__ == "__main__":
     if args.executive:
         generate_executive_summary(df, os.path.join(SUMMARY_DIR, "executive_summary.txt"))
 
-    logger.info("✅ Proceso de consolidación completado.")
+    logger.info("[OK] Proceso de consolidación completado.")

@@ -32,7 +32,7 @@ class RestructAgent:
         self.hurdle = cfg.CONFIG.regulacion.hurdle_rate
 
     # ----------------------------------------------------------
-    #                  🧼 Utilidades internas
+    #                  [U1F9FC] Utilidades internas
     # ----------------------------------------------------------
     @staticmethod
     def _safe_float(x: Any, default: float = 0.0) -> float:
@@ -47,7 +47,7 @@ class RestructAgent:
             return float(default)
 
     # ----------------------------------------------------------
-    #                  🔥 Acción principal
+    #                  [U1F525] Acción principal
     # ----------------------------------------------------------
     def propose(self, loan_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """

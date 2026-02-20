@@ -4,9 +4,10 @@ reports/make_committee_pack.py
 
 Creates a reproducible Committee Pack containing all key artifacts, logs,
 configuration, and execution manifest (git hash, python env, checksums).
+Includes PC9 artifacts (Stress Testing & Backtesting).
 
 Usage:
-    python -m reports.make_committee_pack --tag pc5_postures_validation
+    python -m reports.make_committee_pack --tag pc9_final
 """
 
 import os
@@ -14,18 +15,20 @@ import sys
 import argparse
 import logging
 import shutil
-import json
 import glob
 import hashlib
 import subprocess
+import json
 from datetime import datetime
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, Optional
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT_DIR not in sys.path:
+    sys.path.append(ROOT_DIR)
 
 def calculate_file_hash(filepath: str) -> Optional[str]:
     """Calculates SHA256 hash of a file."""
@@ -43,30 +46,25 @@ def get_git_info() -> Dict[str, str]:
         # Check if git is available
         subprocess.check_output(["git", "--version"], stderr=subprocess.STDOUT)
         
-        commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT_DIR).decode().strip()
-        status = subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT_DIR).decode().strip()
+        # Use simple try-except block for git commands
+        try:
+            commit = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT_DIR).decode().strip()
+        except:
+            commit = "unknown"
+            
+        try:
+            status = subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT_DIR).decode().strip()
+        except:
+            status = "unknown"
+            
         return {"commit": commit, "status": "clean" if not status else "dirty"}
     except Exception as e:
         logger.warning(f"Could not retrieve git info: {e}")
         return {"commit": "unknown", "status": "unknown"}
 
-def find_latest_run_folder(tag: str, posture: str) -> Optional[str]:
-    """Finds the latest run folder for a given tag and posture."""
-    # Search for pattern *coordinated_inference*<tag>*<posture>*
-    search_pattern = os.path.join(ROOT_DIR, "reports", f"*coordinated_inference*{tag}*{posture}*")
-    folders = glob.glob(search_pattern)
-    folders = [f for f in folders if os.path.isdir(f)]
-    
-    if not folders:
-        return None
-        
-    # Sort by creation time ensures we get the latest run
-    folders.sort(key=os.path.getctime, reverse=True)
-    return folders[0]
-
 def main():
     parser = argparse.ArgumentParser(description="Create Committee Pack for auditing.")
-    parser.add_argument("--tag", default="pc5_postures_validation", help="Tag of the RL run cycle to package.")
+    parser.add_argument("--tag", default="pc9_final", help="Tag of the run cycle to package.")
     args = parser.parse_args()
 
     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -74,7 +72,7 @@ def main():
     pack_dir = os.path.join(ROOT_DIR, "reports", pack_name)
     
     os.makedirs(pack_dir, exist_ok=True)
-    logger.info(f"📦 Creating Committee Pack: {pack_dir}")
+    logger.info(f"[U1F4E6] Creating Committee Pack for tag '{args.tag}': {pack_dir}")
 
     manifest: Dict[str, Any] = {
         "timestamp": timestamp_str,
@@ -82,206 +80,144 @@ def main():
         "git": get_git_info(),
         "python_executable": sys.executable,
         "python_version": sys.version,
-        "environment": {},
         "models_checksums": {},
-        "data_checksums": {},
         "artifacts": []
     }
 
-    # 1. Environment Info (pip freeze)
-    pip_freeze_path = os.path.join(pack_dir, "pip_freeze.txt")
-    try:
-        with open(pip_freeze_path, "w") as f:
-            subprocess.run([sys.executable, "-m", "pip", "freeze"], stdout=f, check=True)
-        manifest["environment"]["pip_freeze"] = "pip_freeze.txt"
-    except Exception as e:
-        logger.error(f"Failed to generate pip freeze: {e}")
+    # 0. Models checksums
+    models_dir = os.path.join(ROOT_DIR, "models")
+    if os.path.exists(models_dir):
+        for fname in os.listdir(models_dir):
+            fpath = os.path.join(models_dir, fname)
+            if os.path.isfile(fpath):
+                manifest["models_checksums"][fname] = calculate_file_hash(fpath)
 
-    # 2. Config Snapshot (Extended for Audit)
+    # 1. Config Snapshot
     try:
-        sys.path.append(ROOT_DIR)
-        import config
-        
-        # Extract critical config values
-        manifest["config_snapshot"] = {
-            "COORDINATOR_PRIORITY": getattr(config, "COORDINATOR_PRIORITY", "N/A"),
-            "STRICT_CONTRACT_VALIDATION": getattr(config, "STRICT_CONTRACT_VALIDATION", "N/A"),
-            "GUARDRAILS": {k: v for k, v in config.__dict__.items() if k.startswith("GR_")}
-        }
-        
-        # Copy config.py
         shutil.copy(os.path.join(ROOT_DIR, "config.py"), os.path.join(pack_dir, "config.py"))
         manifest["artifacts"].append("config.py")
     except Exception as e:
-        logger.error(f"Failed to snapshot config: {e}")
+        logger.error(f"Failed to copy config.py: {e}")
 
-    # 3. Models and Checksums
-    models_dir = os.path.join(ROOT_DIR, "models")
-    model_files = [
-        "best_model_loan.zip",
-        "best_model_portfolio.zip",
-        "vecnormalize_loan.pkl",
-        "vecnormalize_loan.meta.json",
-        "training_metadata_loan.json",
-        "obs_feature_order_loan.json"
-    ]
-    
-    for m_file in model_files:
-        src = os.path.join(models_dir, m_file)
+    # 2. Key Documentation
+    docs = ["RUNBOOK_COMMITTEE.md", "README.md", "MEMO_COMMITTEE.md", "CHECKLIST_COMMITTEE.md"]
+    for doc in docs:
+        src = os.path.join(ROOT_DIR, doc)
         if os.path.exists(src):
-            dst = os.path.join(pack_dir, m_file)
-            shutil.copy(src, dst)
-            manifest["models_checksums"][m_file] = calculate_file_hash(src)
-            manifest["artifacts"].append(m_file)
-        else:
-            logger.warning(f"Model file not found: {m_file}")
+            try:
+                shutil.copy2(src, pack_dir)
+                manifest["artifacts"].append(doc)
+            except Exception as e:
+                logger.warning(f"Could not copy {doc}: {e}")
 
-    # 4. Data Checksums
-    data_dir = os.path.join(ROOT_DIR, "data")
-    data_files = ["portfolio_synth.xlsx", "portfolio_synth_smoke.xlsx"]
+    # 3. PC9 Artifacts: Stress Summary & Backtesting Light
+    # Pattern: reports/stress_summary_<tag>.csv
+    # Pattern: reports/backtesting_light_<tag>.csv / .md
     
-    for d_file in data_files:
-        src = os.path.join(data_dir, d_file)
-        if os.path.exists(src):
-            # We don't copy data files to pack usually (too big/sensitive), but we hash them
-            manifest["data_checksums"][d_file] = calculate_file_hash(src)
+    # Try exact match first
+    stress_sum = os.path.join(ROOT_DIR, "reports", f"stress_summary_{args.tag}.csv")
+    if not os.path.exists(stress_sum):
+        # Fallback: maybe timestamped? Or user ran verification and wants final pack?
+        # If tag is pc9_final, but verification run was pc9_verification...
+        # We look for ANY recent stress summary if exact not found?
+        pass
 
-    # 4b. Runbook & Memo
-    runbook_path = os.path.join(ROOT_DIR, "RUNBOOK_COMMITTEE.md")
-    if os.path.exists(runbook_path):
-        shutil.copy2(runbook_path, pack_dir)
-        manifest["artifacts"].append("RUNBOOK_COMMITTEE.md")
+    if os.path.exists(stress_sum):
+        shutil.copy2(stress_sum, pack_dir)
+        manifest["artifacts"].append(os.path.basename(stress_sum))
+        logger.info(f"Included stress summary: {stress_sum}")
     else:
-        logger.warning(f"RUNBOOK_COMMITTEE.md not found at {runbook_path}")
-
-    memo_path = os.path.join(ROOT_DIR, "reports", "MEMO_COMMITTEE.md")
-    if os.path.exists(memo_path):
-        shutil.copy2(memo_path, pack_dir)
-        manifest["artifacts"].append("MEMO_COMMITTEE.md")
+        logger.warning(f"Stress summary not found: {stress_sum}")
+        
+    backtest_csv = os.path.join(ROOT_DIR, "reports", f"backtesting_light_{args.tag}.csv")
+    if os.path.exists(backtest_csv):
+        shutil.copy2(backtest_csv, pack_dir)
+        manifest["artifacts"].append(os.path.basename(backtest_csv))
+        logger.info(f"Included backtest csv: {backtest_csv}")
     else:
-        logger.warning(f"MEMO_COMMITTEE.md not found at {memo_path}")
+        logger.warning(f"Backtest CSV not found: {backtest_csv}")
+    
+    backtest_md = os.path.join(ROOT_DIR, "reports", f"backtesting_light_{args.tag}.md")
+    if os.path.exists(backtest_md):
+        shutil.copy2(backtest_md, pack_dir)
+        manifest["artifacts"].append(os.path.basename(backtest_md))
 
-    # Checklist
-    checklist_path = os.path.join(ROOT_DIR, "CHECKLIST_COMMITTEE.md")
-    if os.path.exists(checklist_path):
-        shutil.copy2(checklist_path, pack_dir)
-        manifest["artifacts"].append("CHECKLIST_COMMITTEE.md")
-    else:
-        logger.warning(f"CHECKLIST_COMMITTEE.md not found at {checklist_path}")
+    # 4. Evaluation Report (if exists)
+    eval_rep = os.path.join(ROOT_DIR, "reports", f"evaluation_{args.tag}.csv") # Or typical name
+    if not os.path.exists(eval_rep):
+         eval_rep = os.path.join(ROOT_DIR, "reports", "evaluation_pc6.csv")
+         
+    if os.path.exists(eval_rep):
+         shutil.copy2(eval_rep, pack_dir)
+         manifest["artifacts"].append(os.path.basename(eval_rep))
 
-    # 5. RL Artifacts (Latest per posture)
+    eval_md = os.path.join(ROOT_DIR, "reports", "evaluation_report.md")
+    if os.path.exists(eval_md):
+        shutil.copy2(eval_md, pack_dir)
+        manifest["artifacts"].append("evaluation_report.md")
+
+    # 5. QA evidence
+    qa_ev = os.path.join(ROOT_DIR, "logs", "qa_checkpoint6_evidence.txt")
+    if os.path.exists(qa_ev):
+        shutil.copy2(qa_ev, pack_dir)
+        manifest["artifacts"].append("qa_checkpoint6_evidence.txt")
+
+    qa_ev9 = os.path.join(ROOT_DIR, "logs", "qa_checkpoint9_evidence.txt")
+    if os.path.exists(qa_ev9):
+        shutil.copy2(qa_ev9, pack_dir)
+        manifest["artifacts"].append("qa_checkpoint9_evidence.txt")
+
+    # 6. pip freeze
+    try:
+        pip_out = subprocess.check_output(
+            [sys.executable, "-m", "pip", "freeze"], cwd=ROOT_DIR
+        ).decode("utf-8", errors="replace")
+        pip_path = os.path.join(pack_dir, "pip_freeze.txt")
+        with open(pip_path, "w", encoding="utf-8") as f:
+            f.write(pip_out)
+        manifest["artifacts"].append("pip_freeze.txt")
+    except Exception as e:
+        logger.warning(f"Could not generate pip freeze: {e}")
+
+    # 7. Per-posture run folders with Excel decision files
     postures = ["prudencial", "balanceado", "desinversion"]
     for posture in postures:
-        folder = find_latest_run_folder(args.tag, posture)
-        if not folder:
-            logger.warning(f"⚠️ No run folder found for posture: {posture} (tag: {args.tag})")
-            continue
-        
-        logger.info(f"Found run for {posture}: {os.path.basename(folder)}")
-        
-        # Determine source files
-        files_to_copy = [
-            f"portfolio_kpis_{posture}.json",
-            f"overrides_log_{posture}.csv"
+        # Search for the most recent run for this tag + posture
+        run_src = None
+        # Try: reports/<tag>_<posture>/ or reports/inference_*_<tag>*_<posture>/
+        patterns = [
+            os.path.join(ROOT_DIR, "reports", f"*{args.tag}*{posture}*"),
+            os.path.join(ROOT_DIR, "reports", "*", f"*{posture}*"),
+            os.path.join(ROOT_DIR, "reports", "runs", f"*{args.tag}*", posture),
         ]
-        
-        # Excel file (pattern match)
-        excel_files = glob.glob(os.path.join(folder, "decisiones_finales_*.xlsx"))
-        
-        # Destination subfolder inside pack to avoid filename collisions
-        # Structure: reports/committee_pack_.../run_prudencial/...
-        dest_subfolder = os.path.join(pack_dir, f"run_{posture}")
-        os.makedirs(dest_subfolder, exist_ok=True)
+        candidates = []
+        for pat in patterns:
+            candidates.extend(glob.glob(pat))
+        candidates = [c for c in candidates if os.path.isdir(c)]
+        if candidates:
+            candidates.sort(key=os.path.getmtime, reverse=True)
+            run_src = candidates[0]
 
-        # Copy KPIs and Overrides
-        for fname in files_to_copy:
-            src = os.path.join(folder, fname)
-            if os.path.exists(src):
-                shutil.copy2(src, dest_subfolder)
-                manifest["artifacts"].append(f"run_{posture}/{fname}")
-            else:
-                logger.warning(f"  Missing artifact: {fname} in {folder}")
+        pack_posture_dir = os.path.join(pack_dir, f"run_{posture}")
+        os.makedirs(pack_posture_dir, exist_ok=True)
+        if run_src:
+            # Copy Excel decision files
+            for root_w, dirs_w, files_w in os.walk(run_src):
+                for fname in files_w:
+                    if fname.endswith(".xlsx"):
+                        src_f = os.path.join(root_w, fname)
+                        shutil.copy2(src_f, pack_posture_dir)
+                        manifest["artifacts"].append(f"run_{posture}/{fname}")
+                        break  # Only first xlsx per posture is enough
+                break  # Only top-level (one level deep)  
 
-        # Copy Excel
-        if excel_files:
-            excel_name = os.path.basename(excel_files[0])
-            shutil.copy2(excel_files[0], dest_subfolder)
-            manifest["artifacts"].append(f"run_{posture}/{excel_name}")
-        else:
-            logger.warning(f"  Result Excel not found in {folder}")
-
-    # 4. Report Artifacts
-    # Attempt to find compare_postures CSV
-    compare_pattern = os.path.join(ROOT_DIR, "reports", f"compare_postures_*.csv")
-    found_compares = glob.glob(compare_pattern)
-    # Filter somewhat by tag if possible
-    found_compares_tag = [f for f in found_compares if args.tag in f]
-    
-    report_files_src = []
-    
-    if found_compares_tag:
-        # Latest by mtime
-        found_compares_tag.sort(key=os.path.getmtime, reverse=True)
-        report_files_src.append(found_compares_tag[0])
-    elif found_compares:
-        # Fallback to any compare posture
-        found_compares.sort(key=os.path.getmtime, reverse=True)
-        report_files_src.append(found_compares[0])
-        
-    # Explicit reports
-    explicit_reports = [
-        "reports/evaluation_pc6.csv",
-        "reports/evaluation_report.md"
-    ]
-    for r in explicit_reports:
-        r_abs = os.path.join(ROOT_DIR, r)
-        if os.path.exists(r_abs):
-            report_files_src.append(r_abs)
-    
-    # Copy reports
-    for r_src in report_files_src:
-        if os.path.exists(r_src):
-            shutil.copy2(r_src, pack_dir)
-            manifest["artifacts"].append(os.path.basename(r_src))
-        else:
-            logger.warning(f"⚠️ Report not found: {r_src}")
-
-    # 5. Log Artifacts
-    log_files = [
-        "logs/qa_checkpoint5_evidence.txt",
-        "logs/qa_checkpoint6_evidence.txt"
-    ]
-    for l_file in log_files:
-        src = os.path.join(ROOT_DIR, l_file)
-        if os.path.exists(src):
-            shutil.copy2(src, pack_dir)
-            manifest["artifacts"].append(os.path.basename(l_file))
-        else:
-            logger.warning(f"⚠️ Log not found: {l_file}")
-
-    # 6. Checksums (Validation & Cleanup)
-    # (Models and Data Checksums are already handled in previous sections)
-    
-    # Check if artifacts list matches reality or needs deduplication
-    manifest["artifacts"] = sorted(list(set(manifest["artifacts"])))
-
-    # 7. Generate Outputs List (Recursive)
-    outputs_list = []
-    for root, dirs, files in os.walk(pack_dir):
-        for file in files:
-            abs_path = os.path.join(root, file)
-            rel_path = os.path.relpath(abs_path, pack_dir)
-            outputs_list.append(rel_path.replace("\\", "/"))
-            
-    manifest["outputs_list"] = sorted(outputs_list)
-
-    # 8. Write Manifest
-    manifest_path = os.path.join(pack_dir, "MANIFEST.json")
-    with open(manifest_path, "w", encoding="utf-8") as f:
+    # 8. Manifest
+    with open(os.path.join(pack_dir, "MANIFEST.json"), "w") as f:
         json.dump(manifest, f, indent=4)
-    
-    logger.info(f"✅ Committee Pack generated successfully at: {pack_dir}")
-    print(f"PACK_PATH={pack_dir}") # Output for callers
+        
+    logger.info(f"[OK] Committee Pack generated successfully at: {pack_dir}")
+    # Print machine-readable path for subprocess callers (tests / CI)
+    print(f"PACK_PATH={pack_dir}")
 
 if __name__ == "__main__":
     main()

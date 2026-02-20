@@ -24,7 +24,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill, Border, Side
 
 # -----------------------------------------------------------
-# 📣 Logging
+# [U1F4E3] Logging
 # -----------------------------------------------------------
 logger = logging.getLogger("export_financial_decisions")
 if not logger.handlers:
@@ -34,7 +34,7 @@ if not logger.handlers:
 logger.setLevel(logging.INFO)
 
 # -----------------------------------------------------------
-# 🎨 Estilos y utilidades
+# [U1F3A8] Estilos y utilidades
 # -----------------------------------------------------------
 THIN = Side(border_style="thin", color="999999")
 CENTER = Alignment(horizontal="center", vertical="center")
@@ -51,7 +51,7 @@ def _safe_div(a, b):
     return res
 
 # -----------------------------------------------------------
-# 🧮 Enriquecimiento de decisiones
+# [U1F9EE] Enriquecimiento de decisiones
 # -----------------------------------------------------------
 def enrich_financial_decisions(df: pd.DataFrame) -> pd.DataFrame:
     """Añade métricas derivadas (ΔEVA, ROI, etc.) y texto justificativo."""
@@ -71,13 +71,13 @@ def enrich_financial_decisions(df: pd.DataFrame) -> pd.DataFrame:
 
         if act == "MANTENER":
             msg = (
-                f"✅ Se mantiene el préstamo: EVA={eva_pre:,.0f} €, "
+                f"[OK] Se mantiene el préstamo: EVA={eva_pre:,.0f} €, "
                 f"RORWA={rorwa_pre:.2%}, superior al hurdle. "
                 f"El activo conserva valor económico y estabilidad regulatoria."
             )
         elif act == "REESTRUCTURAR":
             msg = (
-                f"🟠 Se reestructura para mejorar EVA a {eva_post:,.0f} €. "
+                f"[U1F7E0] Se reestructura para mejorar EVA a {eva_post:,.0f} €. "
                 f"Nuevo plazo={r.get('plazo_optimo','N/D')} meses, "
                 f"tasa={r.get('tasa_nueva',r.get('tasa_anual','N/D')):.2%}, "
                 f"quita={r.get('quita',0)*100:.1f} %. "
@@ -85,14 +85,14 @@ def enrich_financial_decisions(df: pd.DataFrame) -> pd.DataFrame:
             )
         elif act == "VENDER":
             msg = (
-                f"🔴 Se vende en mercado secundario (NPL): "
+                f"[U1F534] Se vende en mercado secundario (NPL): "
                 f"precio óptimo={r.get('precio_optimo',0):,.0f} €, "
                 f"liberando {capital_lib:,.0f} € de capital regulatorio "
                 f"y mejorando la ratio CET1. "
                 f"Estimación simulada por price_simulator.py."
             )
         else:
-            msg = "⚪ Acción no identificada o sin datos suficientes."
+            msg = "[U26AA] Acción no identificada o sin datos suficientes."
 
         justificaciones.append(msg)
 
@@ -100,7 +100,7 @@ def enrich_financial_decisions(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 # -----------------------------------------------------------
-# 📊 Exportación a Excel
+# [U1F4CA] Exportación a Excel
 # -----------------------------------------------------------
 def export_financial_excel(df: pd.DataFrame, out_path: str) -> str:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -134,22 +134,22 @@ def export_financial_excel(df: pd.DataFrame, out_path: str) -> str:
     ws.column_dimensions["E"].width = 80
 
     wb.save(out_path)
-    logger.info(f"✅ Excel de decisiones guardado en {out_path}")
+    logger.info(f"[OK] Excel de decisiones guardado en {out_path}")
     return os.path.abspath(out_path)
 
 # -----------------------------------------------------------
-# 💾 Exportación a JSON
+# [U1F4BE] Exportación a JSON
 # -----------------------------------------------------------
 def export_financial_json(df: pd.DataFrame, out_path: str) -> str:
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     records = df.to_dict(orient="records")
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(records, f, indent=2, ensure_ascii=False)
-    logger.info(f"💾 JSON guardado en {out_path}")
+    logger.info(f"[U1F4BE] JSON guardado en {out_path}")
     return os.path.abspath(out_path)
 
 # -----------------------------------------------------------
-# 🚀 API principal
+# [U1F680] API principal
 # -----------------------------------------------------------
 def export_financial_decisions(df: pd.DataFrame, out_dir: str) -> Dict[str, Any]:
     """
@@ -157,7 +157,7 @@ def export_financial_decisions(df: pd.DataFrame, out_dir: str) -> Dict[str, Any]
     Retorna las rutas de salida (Excel + JSON).
     """
     os.makedirs(out_dir, exist_ok=True)
-    logger.info("📊 Enriqueciendo decisiones con métricas financieras...")
+    logger.info("[U1F4CA] Enriqueciendo decisiones con métricas financieras...")
     df_enriched = enrich_financial_decisions(df)
 
     excel_path = os.path.join(out_dir, "financial_decisions.xlsx")

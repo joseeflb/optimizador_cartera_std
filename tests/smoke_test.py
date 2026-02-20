@@ -51,7 +51,7 @@ def test_portfolio_env_actions() -> None:
         _assert(isinstance(reward, float), "PortfolioEnv reward should be float.")
         _assert(isinstance(terminated, bool) and isinstance(truncated, bool), "Gymnasium flags invalid.")
 
-        # ✅ AÑADE ESTO:
+        # [OK] AÑADE ESTO:
         if terminated or truncated:
             break
 
@@ -70,7 +70,7 @@ def test_loan_env_obs_shape_and_order() -> None:
     obs, _ = env.reset()
     _assert(obs.shape == (10,), "LoanEnv obs shape must be (10,).")
 
-    # ✅ si LoanEnv devuelve obs normalizada, desnormalizamos para checks
+    # [OK] si LoanEnv devuelve obs normalizada, desnormalizamos para checks
     if getattr(env, "normalize_obs", False):
         scale = np.array([1e6, 1.0, 1.0, 1.5, 1e6, 1.0, 0.30, 9.0, 9.0, 24.0], dtype=np.float32)
         obs_check = obs * scale

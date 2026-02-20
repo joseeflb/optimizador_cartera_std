@@ -55,13 +55,25 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 
-echo [%time%] 3.5. Running Stress & Sensitivities (PC9)...
+echo [%time%] 3.5. Running Stress and Sensitivities (PC9)...
 echo [INFO] Running stress engine... >> %LOGFILE%
-python -m engines.stress_engine --tag %TAG% --portfolio data/portfolio_synth.xlsx --scenarios configs/stress_scenarios.yaml >> %LOGFILE% 2>&1
+:: Using portfolio_snapshot.xlsx for final/ci run, or verify existence
+if exist data\portfolio_snapshot.xlsx (
+    set PORTFOLIO=data\portfolio_snapshot.xlsx
+) else (
+    set PORTFOLIO=data\portfolio_synth.xlsx
+)
+python -m engines.stress_engine --tag %TAG% --portfolio !PORTFOLIO! --scenarios configs/stress_scenarios.yaml --postures prudencial balanceado desinversion >> %LOGFILE% 2>&1
 if !errorlevel! neq 0 (
     echo [ERROR] Stress Engine failed. See %LOGFILE%
     exit /b 1
 )
+:: Verify stress summary artifact exists
+if not exist "reports\stress_summary_%TAG%.csv" (
+    echo [ERROR] Stress summary not generated: reports\stress_summary_%TAG%.csv
+    exit /b 1
+)
+echo [OK] Stress summary: reports\stress_summary_%TAG%.csv >> %LOGFILE%
 
 echo [INFO] Running backtesting light... >> %LOGFILE% 
 python -m reports.backtesting_light --tag %TAG% --stress-scenarios configs/stress_scenarios.yaml >> %LOGFILE% 2>&1
@@ -69,6 +81,12 @@ if !errorlevel! neq 0 (
     echo [ERROR] Backtesting Light failed. See %LOGFILE%
     exit /b 1
 )
+:: Verify backtesting artifact exists
+if not exist "reports\backtesting_light_%TAG%.csv" (
+    echo [ERROR] Backtesting light CSV not generated: reports\backtesting_light_%TAG%.csv
+    exit /b 1
+)
+echo [OK] Backtesting light: reports\backtesting_light_%TAG%.csv >> %LOGFILE%
 
 echo [%time%] 4. Running Comparison...
 echo [INFO] Running python -m reports.compare_postures --tag %TAG% >> %LOGFILE%

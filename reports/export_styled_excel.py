@@ -30,7 +30,7 @@ from openpyxl.utils.dataframe import dataframe_to_rows
 import config as cfg
 
 # ============================================
-# 🎨 ESTILOS
+# [U1F3A8] ESTILOS
 # ============================================
 THIN = Side(border_style="thin", color="999999")
 HDR_FILL = PatternFill("solid", fgColor="DCE6F1")
@@ -54,7 +54,7 @@ ACCION_COLOR = {
 }
 
 # ============================================
-# 📌 UTILIDADES
+# [U1F4CC] UTILIDADES
 # ============================================
 def _autofit(ws):
     for col in ws.columns:
@@ -145,7 +145,7 @@ def _get_segment_col(df: pd.DataFrame) -> str:
 
 
 # ============================================
-# 🧠 NOTA EJECUTIVA (muy breve, sin scroll)
+# [U1F9E0] NOTA EJECUTIVA (muy breve, sin scroll)
 # ============================================
 def _build_comment_short(r: dict) -> str:
     act = _get_action_for_row(r)
@@ -218,7 +218,7 @@ def _build_comment_short(r: dict) -> str:
 
 
 # ============================================
-# 📄 HOJA: decisiones
+# [U1F4C4] HOJA: decisiones
 # ============================================
 def _write_decisiones(wb: Workbook, df: pd.DataFrame):
     ws = wb.create_sheet("decisiones")
@@ -234,7 +234,7 @@ def _write_decisiones(wb: Workbook, df: pd.DataFrame):
         # "Accion" legacy debe reflejar final si existe
         df["Accion"] = df["Accion_final"]
     elif "Accion" not in df.columns:
-        df["Accion"] = df.get("Accion_micro", "❓")
+        df["Accion"] = df.get("Accion_micro", "[?]")
 
     # ---- Quitar Explain_Steps si existe (ruido) ----
     if "Explain_Steps" in df.columns:
@@ -246,7 +246,7 @@ def _write_decisiones(wb: Workbook, df: pd.DataFrame):
         if "Explanation_final" in df.columns:
             df["Explanation"] = df["Explanation_final"]
         else:
-            df["Explanation"] = "❓"
+            df["Explanation"] = "[?]"
 
     # ---- Orden preferente (incluye coordinator columns) ----
     order = [
@@ -315,7 +315,7 @@ def _write_decisiones(wb: Workbook, df: pd.DataFrame):
 
 
 # ============================================
-# 📄 HOJA: resumen_segmento
+# [U1F4C4] HOJA: resumen_segmento
 # ============================================
 def _write_resumen_segmento(wb: Workbook, df: pd.DataFrame):
     ws = wb.create_sheet("resumen_segmento")
@@ -328,7 +328,7 @@ def _write_resumen_segmento(wb: Workbook, df: pd.DataFrame):
     # Acción a usar en agregación (final preferente)
     action_col = "Accion_final" if "Accion_final" in df.columns else ("Accion" if "Accion" in df.columns else None)
     if action_col is None:
-        df["Accion"] = "❓"
+        df["Accion"] = "[?]"
         action_col = "Accion"
 
     # KPIs (robusto si faltan columnas)
@@ -355,7 +355,7 @@ def _write_resumen_segmento(wb: Workbook, df: pd.DataFrame):
 
 
 # ============================================
-# 📄 HOJA: resumen_global
+# [U1F4C4] HOJA: resumen_global
 # ============================================
 def _write_resumen_global(wb: Workbook, df: pd.DataFrame):
     ws = wb.create_sheet("resumen_global")
@@ -368,7 +368,7 @@ def _write_resumen_global(wb: Workbook, df: pd.DataFrame):
 
     action_col = "Accion_final" if "Accion_final" in df.columns else ("Accion" if "Accion" in df.columns else None)
     if action_col is None:
-        df["Accion"] = "❓"
+        df["Accion"] = "[?]"
         action_col = "Accion"
 
     ws["A1"] = "KPIs Globales del Portfolio"
@@ -403,7 +403,7 @@ def _write_resumen_global(wb: Workbook, df: pd.DataFrame):
 
 
 # ============================================
-# 📄 HOJA: parámetros
+# [U1F4C4] HOJA: parámetros
 # ============================================
 def _write_params(wb: Workbook):
     ws = wb.create_sheet("parametros")

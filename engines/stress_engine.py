@@ -202,18 +202,21 @@ def run_stress_pipeline(tag: str, portfolio_path: str, scenarios_yaml: str, post
                       zips = [f for f in os.listdir(os.path.join(ROOT_DIR, "models", "checkpoints")) if f.endswith(".zip")]
                       if zips:
                            model_micro = os.path.join(ROOT_DIR, "models", "checkpoints", zips[0])
-                           model_micro = model_micro.replace(".zip", "") # stable-baselines3 adds .zip automatically usually
+                           # model_micro = model_micro.replace(".zip", "") # Removed: coordinator checks exact file existence
 
                  # Execute
                  out_dir, excel_path = run_coordinator_inference(
                     model_micro=model_micro,
                     portfolio_path=stressed_port_path, # Shocked portfolio
+                    vecnorm_micro_path=None,
+                    model_macro=None,
                     risk_posture=posture,
+                    n_steps=5, # Short steps for stress
+                    top_k=5,
                     tag=f"{tag}_{sc_name}",
                     base_output_dir=run_output_dir,
                     device="cpu", # Force CPU for stability in batch
                     # Defaults for others
-                    model_macro=None, 
                     export_audit_csv=True
                 )
                 
@@ -221,14 +224,24 @@ def run_stress_pipeline(tag: str, portfolio_path: str, scenarios_yaml: str, post
                  if excel_path and os.path.exists(excel_path):
                     df_res = pd.read_excel(excel_path)
 
+                    def _col(df, *names, default=0.0):
+                        for n in names:
+                            if n in df.columns:
+                                return df[n].sum()
+                        return default
+
                     summary_records.append({
                         "scenario": sc_name,
                         "posture": posture,
-                        "total_ead": df_res["EAD"].sum(),
-                        "total_eva": df_res["EVA"].sum() if "EVA" in df_res.columns else 0,
-                        "total_rwa": df_res["RWA"].sum() if "RWA" in df_res.columns else 0,
-                        "n_sales": (df_res["Accion_final"] == "VENDER").sum(),
-                        "n_restruct": (df_res["Accion_final"] == "REESTRUCTURAR").sum(),
+                        "total_ead": _col(df_res, "EAD"),
+                        "total_eva_post": _col(df_res, "EVA_post", "EVA_gain"),
+                        "total_eva_pre": _col(df_res, "EVA_pre"),
+                        "total_rwa_post": _col(df_res, "RWA_post", "rwa_after"),
+                        "total_rwa_pre": _col(df_res, "RWA_pre", "rwa_before"),
+                        "capital_liberado": _col(df_res, "capital_liberado", "capital_release_net"),
+                        "n_sales": int((df_res["Accion_final"] == "VENDER").sum()) if "Accion_final" in df_res.columns else 0,
+                        "n_restruct": int((df_res["Accion_final"] == "REESTRUCTURAR").sum()) if "Accion_final" in df_res.columns else 0,
+                        "n_mantener": int((df_res["Accion_final"] == "MANTENER").sum()) if "Accion_final" in df_res.columns else 0,
                     })
                  else:
                     logger.warning(f"No results found for {sc_name} / {posture}")
@@ -244,7 +257,10 @@ def run_stress_pipeline(tag: str, portfolio_path: str, scenarios_yaml: str, post
         summary_path = os.path.join(ROOT_DIR, "reports", f"stress_summary_{tag}.csv")
         df_summary.to_csv(summary_path, index=False)
         logger.info(f"Stress Test Complete. Summary saved to: {summary_path}")
-        print(df_summary.to_markdown())
+        try:
+            print(df_summary.to_markdown())
+        except ImportError:
+            print(df_summary.to_string(index=False))
     else:
         logger.error("No stress test results generated.")
 
@@ -258,141 +274,3 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     run_stress_pipeline(args.tag, args.portfolio, args.scenarios, args.postures)
-
-
-        elif scenario == "adverse":
-            return dict(
-                pd_mu=1.20, pd_sd=0.05,
-                lgd_mu=1.05, lgd_sd=0.03,
-                rw_mu=1.05, rw_sd=0.02,
-                rate_mu=0.98, rate_sd=0.02,
-                dpd_add=45
-            )
-
-        elif scenario == "severe":
-            return dict(
-                pd_mu=1.35, pd_sd=0.08,
-                lgd_mu=1.10, lgd_sd=0.04,
-                rw_mu=1.10, rw_sd=0.03,
-                rate_mu=0.95, rate_sd=0.03,
-                dpd_add=75
-            )
-
-        elif scenario == "extreme":
-            return dict(
-                pd_mu=1.55, pd_sd=0.12,
-                lgd_mu=1.20, lgd_sd=0.06,
-                rw_mu=1.15, rw_sd=0.05,
-                rate_mu=0.92, rate_sd=0.04,
-                dpd_add=120
-            )
-
-        else:
-            raise ValueError(f"Escenario macro no reconocido: {scenario}")
-
-    # ----------------------------------------------------------------------
-    #   Shock a un solo periodo
-    # ----------------------------------------------------------------------
-    def apply_macro_shock_once(self, loan: dict, scenario="baseline") -> dict:
-        """
-        Aplica un shock macro de 1 periodo. Mantiene coherencia con LoanEnv.
-        """
-        sh = self._scenario_shock(scenario)
-
-        # ----------------------------
-        # 1. Shock correlacionado
-        # ----------------------------
-        PD_mul = self.rng.normal(sh["pd_mu"], sh["pd_sd"])
-        LGD_mul = self.rng.normal(sh["lgd_mu"], sh["lgd_sd"])
-        RW_mul = self.rng.normal(sh["rw_mu"], sh["rw_sd"])
-        rate_mul = self.rng.normal(sh["rate_mu"], sh["rate_sd"])
-
-        PD = float(loan["PD"] * PD_mul)
-        LGD = float(loan["LGD"] * LGD_mul)
-        RW = float(loan["RW"] * RW_mul)
-        rate = float(loan["rate"] * rate_mul)
-
-        # ----------------------------
-        # 2. Clipping prudencial
-        # ----------------------------
-        PD = np.clip(PD, 0.0001, 1.0)
-        LGD = np.clip(LGD, 0.05, 1.0)
-        RW = np.clip(RW, 0.05, 3.0)
-        rate = np.clip(rate, 0.0, 0.25)
-
-        # ----------------------------
-        # 3. Actualización DPD
-        # ----------------------------
-        DPD_prev = float(loan.get("DPD", 120.0))
-        DPD = DPD_prev + sh["dpd_add"]
-
-        # Estimación fija coherente con portfolio_env:
-        meses_en_default = int(DPD // 30)
-
-        # ----------------------------
-        # 4. Cálculo STD coherente LoanEnv
-        # ----------------------------
-        EAD = float(loan["EAD"])
-        EL = PD * LGD * EAD
-
-        NI = EAD * rate - EL - EAD * self.cost_funding
-
-        RWA = EAD * RW
-        RORWA = float(NI / max(RWA, 1e-9))
-        EVA = float(RWA * (RORWA - self.hurdle))
-
-        # ----------------------------
-        # 5. Efecto cure (coherente)
-        # ----------------------------
-        cured = PD < self.pd_cure_th
-
-        if cured:
-            RW = float(self.rw_cured)
-            RWA = EAD * RW
-            RORWA = float(NI / max(RWA, 1e-9))
-            EVA = float(RWA * (RORWA - self.hurdle))
-
-        # ----------------------------
-        # 6. Guardar estado actualizado
-        # ----------------------------
-        loan.update(
-            PD=float(PD),
-            LGD=float(LGD),
-            RW=float(RW),
-            rate=float(rate),
-            DPD=float(DPD),
-            meses_en_default=meses_en_default,
-            RWA=float(RWA),
-            RORWA=float(RORWA),
-            EVA=float(EVA),
-            cured=bool(cured),
-        )
-
-        return loan
-
-    # ----------------------------------------------------------------------
-    #   Trayectoria multiperiodo (6–8 trimestres)
-    # ----------------------------------------------------------------------
-    def apply_stress_path(self, loan: dict, scenario="baseline") -> dict:
-        """
-        Aplica n_periods shocks consecutivos.
-        """
-        loan = dict(loan)
-        for _ in range(self.n_periods):
-            loan = self.apply_macro_shock_once(loan, scenario)
-        return loan
-
-    # ----------------------------------------------------------------------
-    #   Estrés a cartera completa
-    # ----------------------------------------------------------------------
-    def stress_portfolio(self, df, scenario="baseline"):
-        """
-        Aplica estrés multi-periodo a toda la cartera.
-        Devuelve lista de dicts (compatible con portfolio_env y RL).
-        """
-        out = []
-        for _, row in df.iterrows():
-            loan = row.to_dict()
-            stressed = self.apply_stress_path(loan, scenario)
-            out.append(stressed)
-        return out

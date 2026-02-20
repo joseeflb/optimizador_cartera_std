@@ -44,7 +44,7 @@ import config as cfg
 
 
 # ---------------------------------------------------------------------
-# 🔧 Inicialización
+# [U1F527] Inicialización
 # ---------------------------------------------------------------------
 cfg.set_all_seeds(cfg.GLOBAL_SEED)
 
@@ -60,7 +60,7 @@ HORIZON_YEARS = float(max(1.0, (cfg.CONFIG.sensibilidad_reestructura.horizon_mon
 
 
 # ---------------------------------------------------------------------
-# 🧱 Segmentos sintéticos (legacy -> Enum Segmento)
+# [U1F9F1] Segmentos sintéticos (legacy -> Enum Segmento)
 # ---------------------------------------------------------------------
 SEGMENT_WEIGHTS = {
     "Large Corporate": 0.22,
@@ -138,7 +138,7 @@ def simulate_coverage_rate(
 
 
 # ---------------------------------------------------------------------
-# 🧱 Rating -> base ranges (performing-ish) para luego “NPL-izar”
+# [U1F9F1] Rating -> base ranges (performing-ish) para luego “NPL-izar”
 # ---------------------------------------------------------------------
 RATING_DIST = {
     "AAA": 0.02, "AA": 0.05, "A": 0.10,
@@ -160,7 +160,7 @@ RATING_NUM = {"AAA": 9, "AA": 8, "A": 7, "BBB": 6, "BB": 5, "B": 4, "CCC": 3}
 
 
 # ---------------------------------------------------------------------
-# 🧱 Productos
+# [U1F9F1] Productos
 # ---------------------------------------------------------------------
 PRODUCT_TYPES = [
     "Avales", "Bono", "Cesión de créditos", "Confirming", "Crediglobal",
@@ -295,7 +295,7 @@ def nplize_pd_lgd(
 
 
 # ---------------------------------------------------------------------
-# 🧮 Viabilidad (PTI/DSCR) - utilidades
+# [U1F9EE] Viabilidad (PTI/DSCR) - utilidades
 # ---------------------------------------------------------------------
 def simulate_remaining_months(rng_local: np.random.Generator, seg_raw: str) -> int:
     """
@@ -350,7 +350,7 @@ def rating_bucket(rating: str) -> int:
 
 
 # ---------------------------------------------------------------------
-# 🧮 Generador principal (100% DEFAULT + RW 100/150 STD)
+# [U1F9EE] Generador principal (100% DEFAULT + RW 100/150 STD)
 # ---------------------------------------------------------------------
 def generate_portfolio(n: int = 500, seed: int | None = None) -> pd.DataFrame:
     rng_local = np.random.default_rng(cfg.GLOBAL_SEED if seed is None else seed)

@@ -42,7 +42,7 @@ class PricingAgent:
         self.cfg_price = cfg.CONFIG.precio_venta
 
     # ----------------------------------------------------------
-    #                     🔧 Utilidades
+    #                     [U1F527] Utilidades
     # ----------------------------------------------------------
     @staticmethod
     def _safe_float(v: Any, default: float = 0.0) -> float:
@@ -54,7 +54,7 @@ class PricingAgent:
             return default
 
     # ----------------------------------------------------------
-    #                    🔥 Acción principal
+    #                    [U1F525] Acción principal
     # ----------------------------------------------------------
     def price(self, loan_dict: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """

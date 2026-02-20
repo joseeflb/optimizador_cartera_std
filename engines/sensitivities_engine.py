@@ -52,7 +52,7 @@ class SensitivityEngine:
         self.pd_cure_th = float(sens.pd_cure_threshold)
 
     # ============================================================
-    # 🔹 DERIVADAS PRIMERAS DE NI
+    # [U1F539] DERIVADAS PRIMERAS DE NI
     # ============================================================
     def dNI_dPD(self, loan):
         """∂NI/∂PD = - LGD * EAD"""
@@ -182,14 +182,14 @@ if __name__ == "__main__":
         return float(loan["rate"] - loan["PD"]*loan["LGD"] - self.cost_fund)
 
     # ============================================================
-    # 🔹 SENSIBILIDAD RORWA
+    # [U1F539] SENSIBILIDAD RORWA
     # ============================================================
     def dRORWA(self, dNI, RWA):
         """∂RORWA = dNI / RWA"""
         return float(dNI / max(RWA, 1e-9))
 
     # ============================================================
-    # 🔹 SENSIBILIDAD EVA = RWA*(RORWA−hurdle)
+    # [U1F539] SENSIBILIDAD EVA = RWA*(RORWA−hurdle)
     # ============================================================
     def partial_eva_pd(self, loan):
         dni  = self.dNI_dPD(loan)
@@ -225,7 +225,7 @@ if __name__ == "__main__":
         return float(RWA * dRORWA + (loan["RORWA"] - self.hurdle) * RW)
 
     # ============================================================
-    # 🔹 SENSIBILIDADES DE RWA Y CAPITAL
+    # [U1F539] SENSIBILIDADES DE RWA Y CAPITAL
     # ============================================================
     def partial_rwa_rw(self, loan):
         """∂RWA/∂RW = EAD"""
@@ -236,7 +236,7 @@ if __name__ == "__main__":
         return float(loan["EAD"] * self.cap_ratio)
 
     # ============================================================
-    # 🔹 SENSIBILIDAD A LA CURACIÓN (PD < threshold)
+    # [U1F539] SENSIBILIDAD A LA CURACIÓN (PD < threshold)
     # ============================================================
     def sensitivity_cure(self, loan):
         """
@@ -267,7 +267,7 @@ if __name__ == "__main__":
         return float(EVA_c - loan["EVA"])
 
     # ============================================================
-    # 🔹 SCORE GLOBAL (ranking top-K)
+    # [U1F539] SCORE GLOBAL (ranking top-K)
     # ============================================================
     def global_sensitivity_score(self, loan):
         """

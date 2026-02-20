@@ -235,12 +235,12 @@ def main():
     
     args = parser.parse_args()
     
-    logger.info(f"🚀 Starting Evaluation. Tag: {args.tag}")
+    logger.info(f"[U1F680] Starting Evaluation. Tag: {args.tag}")
     
     # 1. Get RL Results
     rl_metrics = get_rl_results(args.tag)
     if not rl_metrics:
-        logger.warning("⚠️ No RL results found for this tag!")
+        logger.warning("[WARN][UFE0F] No RL results found for this tag!")
     else:
         logger.info(f"Found {len(rl_metrics)} RL runs.")
 
@@ -298,12 +298,12 @@ def main():
     # We can rely on natural sort if named correctly, or force it.
     
     df_res.to_csv(args.out, index=False)
-    logger.info(f"✅ Evaluation CSV saved to: {args.out}")
+    logger.info(f"[OK] Evaluation CSV saved to: {args.out}")
     
     # 5. Generate MD Summary
     md_path = args.out.replace(".csv", ".md")
     with open(md_path, "w", encoding="utf-8") as f:
-        f.write("# 📊 Evaluation Report: RL vs Baselines\n\n")
+        f.write("# [U1F4CA] Evaluation Report: RL vs Baselines\n\n")
         f.write(f"**Tag:** `{args.tag}`\n")
         f.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
         f.write("## Summary Table\n\n")
@@ -322,7 +322,7 @@ def main():
         f.write(f"- **Best EVA:** {best_eva['method']} ({best_eva['final_total_eva']:,.0f}€)\n")
         f.write(f"- **Max Capital Release:** {best_cap['method']} ({best_cap['final_capital_release']:,.0f}€)\n")
         
-    logger.info(f"✅ Markdown Report saved to: {md_path}")
+    logger.info(f"[OK] Markdown Report saved to: {md_path}")
 
 if __name__ == "__main__":
     main()

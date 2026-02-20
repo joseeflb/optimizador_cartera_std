@@ -23,8 +23,8 @@ Cambios clave v2.2 (consistencia con price_simulator.py y restructure_optimizer.
   - [OK] Guardrail fire-sale: por Price/Book (no por Price/Workout).
   - [OK] RW: coerción robusta (100/150 -> 1.0/1.5) y discretización DEFAULT.
   - [OK] Reestructura: usa lógica bankable (optimize_restructure) con gates duros por segmento (PTI/DSCR).
-  - ✅ Score económico homogéneo (EUR): workout_value_proxy / sale_price_net / restructure_value_net.
-  - ✅ Audit trail: drivers numéricos + reglas disparadas por postura.
+  - [OK] Score económico homogéneo (EUR): workout_value_proxy / sale_price_net / restructure_value_net.
+  - [OK] Audit trail: drivers numéricos + reglas disparadas por postura.
 """
 
 from __future__ import annotations
@@ -159,12 +159,12 @@ def harmonize_portfolio_schema(df: pd.DataFrame) -> pd.DataFrame:
 
 def _load_portfolio_df(path: str) -> pd.DataFrame:
     if not os.path.exists(path):
-        raise FileNotFoundError(f"❌ Cartera no encontrada: {path}")
+        raise FileNotFoundError(f"[ERR] Cartera no encontrada: {path}")
     ext = os.path.splitext(path.lower())[1]
     df = pd.read_excel(path) if ext in (".xlsx", ".xls") else pd.read_csv(path)
     df.columns = [c.strip() for c in df.columns]
 
-    # ✅ Harmonize antes de asegurar loan_id (crea PTI/DSCR/book_value y aliases)
+    # [OK] Harmonize antes de asegurar loan_id (crea PTI/DSCR/book_value y aliases)
     df = harmonize_portfolio_schema(df)
 
     if cfg.ID_COL not in df.columns:
@@ -1112,10 +1112,10 @@ def _run_one_posture(df: pd.DataFrame, posture: cfg.BankProfile, cfg_inf: Coordi
         excel_path = os.path.join(out_dir, f"decisiones_{posture.value}.xlsx")
         export_excel_two_sheets(df_dec, df_sum, excel_path)
 
-    logger.info(f"✅ [{posture.value}] CSV decisions: {decisions_csv}")
-    logger.info(f"✅ [{posture.value}] CSV summary:   {summary_csv}")
+    logger.info(f"[OK] [{posture.value}] CSV decisions: {decisions_csv}")
+    logger.info(f"[OK] [{posture.value}] CSV summary:   {summary_csv}")
     if excel_path:
-        logger.info(f"✅ [{posture.value}] Excel:         {excel_path}")
+        logger.info(f"[OK] [{posture.value}] Excel:         {excel_path}")
 
     return excel_path, decisions_csv
 
@@ -1168,4 +1168,4 @@ def parse_args() -> CoordinatedInferenceConfig:
 if __name__ == "__main__":
     cfg_inf = parse_args()
     out_dir = run(cfg_inf)
-    logger.info(f"🏁 Coordinated inference completada. Reporte en: {out_dir}")
+    logger.info(f"[U1F3C1] Coordinated inference completada. Reporte en: {out_dir}")

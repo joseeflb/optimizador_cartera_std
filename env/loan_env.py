@@ -30,14 +30,14 @@ CORRECCIONES CRÍTICAS (consistencia end-to-end):
     - Sin escalado manual de observación por defecto: normalización vía VecNormalize si se usa
 
 PATCHES v6.4 (calidad decisión):
-    - ✅ Economía "true" centralizada (NI/RORWA/EVA) y consistente en estado/reward
-    - ✅ EVA calculada como NI - hurdle*RWA (estable)
-    - ✅ Observación: clip SOLO de RORWA feature (no de la economía)
-    - ✅ Reestructura: evalúa RW_post (cure-aware) dentro del grid
-    - ✅ Gate duro DSCR (viabilidad) además de PTI
-    - ✅ Capital release también en reestructura (si baja RWA)
-    - ✅ Fire-sale explícito por price/book y P&L contable (trazable en info)
-    - ✅ Evita doble conteo de costes one-off en reestructura
+    - [OK] Economía "true" centralizada (NI/RORWA/EVA) y consistente en estado/reward
+    - [OK] EVA calculada como NI - hurdle*RWA (estable)
+    - [OK] Observación: clip SOLO de RORWA feature (no de la economía)
+    - [OK] Reestructura: evalúa RW_post (cure-aware) dentro del grid
+    - [OK] Gate duro DSCR (viabilidad) además de PTI
+    - [OK] Capital release también en reestructura (si baja RWA)
+    - [OK] Fire-sale explícito por price/book y P&L contable (trazable en info)
+    - [OK] Evita doble conteo de costes one-off en reestructura
 """
 
 from __future__ import annotations
@@ -53,7 +53,7 @@ from risk.gates import check_restruct_viability
 
 
 # ---------------------------------------------------------------
-# 🔧 Configuración
+# [U1F527] Configuración
 # ---------------------------------------------------------------
 RESTRUCT_CFG = cfg.CONFIG.reestructura
 SENS_CFG = cfg.CONFIG.sensibilidad_reestructura
@@ -105,7 +105,7 @@ class LoanEnv(gym.Env):
         self.cfg = ENV_CFG
         self.bank_strategy = BANK_STRAT
 
-        # ✅ Consistencia NI/EVA con el generador:
+        # [OK] Consistencia NI/EVA con el generador:
         # PD en NPL = forward a horizonte; EL es lifetime al horizonte y se anualiza para NI.
         self.horizon_years = float(max(1.0, (float(getattr(self.sens_cfg, "horizon_months", 24.0)) / 12.0)))
 
@@ -131,7 +131,7 @@ class LoanEnv(gym.Env):
         self.action_space = spaces.Discrete(self.n_actions)
 
     # -----------------------------------------------------------
-    # ✅ Coerciones robustas (audit-ready)
+    # [OK] Coerciones robustas (audit-ready)
     # -----------------------------------------------------------
     def _segment_id_map(self) -> Dict[str, int]:
         """
@@ -768,7 +768,7 @@ class LoanEnv(gym.Env):
         excess_pti = max(0.0, pti1 - esfuerzo_bajo) / max(1e-6, esfuerzo_alto)
         pti_penalty = float(excess_pti * abs(eva0))
 
-        # ✅ risk_proxy lifetime (no annual)
+        # [OK] risk_proxy lifetime (no annual)
         risk_proxy = float(st1.get("EL", st1.get("PD", 0.0) * st1.get("LGD", 0.0) * st1.get("EAD", 0.0)))
 
         cure_bonus = 0.0

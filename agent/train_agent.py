@@ -13,7 +13,7 @@ Incluye:
 - VecNormalize (obs + reward) con sincronización en eval
 - FAST-DEBUG coherente con config.py
 - Soporte entornos: loan / portfolio
-- (Opcional) PortfolioEnv micro→macro re-ranking con PPO micro (LoanEnv) + VecNormalize micro por ruta
+- (Opcional) PortfolioEnv micro->macro re-ranking con PPO micro (LoanEnv) + VecNormalize micro por ruta
 
 FIX v1.2 (crítico):
 - Artefactos separados por env_type para evitar pisar VecNormalize:
@@ -38,7 +38,7 @@ from typing import Any, Dict, List, Optional
 import numpy as np
 
 # -----------------------------------------------------------
-# 🔧 Rutas
+# [U1F527] Rutas
 # -----------------------------------------------------------
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
@@ -55,7 +55,7 @@ for d in (LOG_DIR, REPORTS_DIR, MODELS_DIR):
     os.makedirs(d, exist_ok=True)
 
 # -----------------------------------------------------------
-# 📦 Imports RL
+# [U1F4E6] Imports RL
 # -----------------------------------------------------------
 try:
     import torch
@@ -65,10 +65,10 @@ try:
     from stable_baselines3.common.monitor import Monitor
     from stable_baselines3.common.callbacks import BaseCallback
 except ImportError:
-    raise SystemExit("❌ Faltan dependencias RL. Ejecuta install_requirements_smart.py.")
+    raise SystemExit("[ERR] Faltan dependencias RL. Ejecuta install_requirements_smart.py.")
 
 # -----------------------------------------------------------
-# 🧠 Logging
+# [U1F9E0] Logging
 # -----------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -81,7 +81,7 @@ logging.basicConfig(
 logger = logging.getLogger("train_agent")
 
 # -----------------------------------------------------------
-# 🥪 Semillas globales
+# [U1F96A] Semillas globales
 # -----------------------------------------------------------
 def set_global_seeds(seed: int) -> None:
     import random
@@ -150,7 +150,7 @@ class TrainConfig:
 
 
 # -----------------------------------------------------------
-# 📈 Métricas financieras (por episodio)
+# [U1F4C8] Métricas financieras (por episodio)
 # -----------------------------------------------------------
 MICRO_OBS_ORDER = [
     "EAD", "PD", "LGD", "RW", "EVA", "RONA", "RORWA", "rating_num", "segmento_id", "DPD/30"
@@ -222,7 +222,7 @@ def extract_episode_business_metrics(info_list: List[Any]) -> Dict[str, float]:
 
 
 # -----------------------------------------------------------
-# 📊 Callback EVA + Capital + penalties (early stopping)
+# [U1F4CA] Callback EVA + Capital + penalties (early stopping)
 # -----------------------------------------------------------
 class BusinessEvalCallback(BaseCallback):
     """
@@ -341,27 +341,27 @@ class BusinessEvalCallback(BaseCallback):
         self._last_eval_timestep = t
 
         metric = self._eval_once()
-        logger.info(f"📊 Eval @ {t:,}: score={metric:.6f} (best={self.best_metric:.6f})")
+        logger.info(f"[U1F4CA] Eval @ {t:,}: score={metric:.6f} (best={self.best_metric:.6f})")
 
         if metric > self.best_metric:
             self.best_metric = metric
             self.no_improve = 0
             if self.best_model_path:
                 self._save_best_bundle()
-                logger.info(f"💾 Mejor modelo actualizado: {self.best_model_path}")
+                logger.info(f"[U1F4BE] Mejor modelo actualizado: {self.best_model_path}")
         else:
             self.no_improve += 1
 
         if self.no_improve >= self.patience_evals:
             self.stopped_early = True
-            logger.info("🛑 Early stopping: no mejora en evaluaciones sucesivas.")
+            logger.info("[U1F6D1] Early stopping: no mejora en evaluaciones sucesivas.")
             return False
 
         return True
 
 
 # -----------------------------------------------------------
-# 🏠 Fábrica de entornos
+# [U1F3E0] Fábrica de entornos
 # -----------------------------------------------------------
 def make_env(
     env_type: str,
@@ -424,7 +424,7 @@ def make_vec_envs(
 
 
 # -----------------------------------------------------------
-# ⚡ PPO model
+# [U26A1] PPO model
 # -----------------------------------------------------------
 def _auto_device(device: str) -> str:
     return "cuda" if device == "auto" and torch.cuda.is_available() else device
@@ -457,13 +457,13 @@ def build_model(cfg_train: TrainConfig, vec_env) -> PPO:
 
 
 # -----------------------------------------------------------
-# 🧩 Carga PPO micro (opcional) para PortfolioEnv
+# [U1F9E9] Carga PPO micro (opcional) para PortfolioEnv
 # -----------------------------------------------------------
 def load_micro_policy(micro_model_path: str, micro_vecnorm_path: str) -> Optional[Any]:
     if not micro_model_path:
         return None
     if not os.path.exists(micro_model_path):
-        raise FileNotFoundError(f"❌ micro_model no existe: {micro_model_path}")
+        raise FileNotFoundError(f"[ERR] micro_model no existe: {micro_model_path}")
 
     if micro_vecnorm_path:
         if not os.path.exists(micro_vecnorm_path):
@@ -488,7 +488,7 @@ def _file_sha256(path: str, chunk_size: int = 1 << 20) -> str:
 
 
 # -----------------------------------------------------------
-# 🚀 Entrenamiento
+# [U1F680] Entrenamiento
 # -----------------------------------------------------------
 def train(cfg_train: TrainConfig) -> str:
     logger.info(f"============== ENTRENAMIENTO PPO — {cfg_train.env_type.upper()} ENV ==============")
@@ -507,7 +507,7 @@ def train(cfg_train: TrainConfig) -> str:
     set_global_seeds(cfg_train.seed)
 
     # -------------------------------------------------------
-    # 🧾 Naming por entorno (evita pisar VN/modelos)
+    # [U1F9FE] Naming por entorno (evita pisar VN/modelos)
     # -------------------------------------------------------
     env_tag = "loan" if cfg_train.env_type == "loan" else "portfolio"
     best_model_path = os.path.join(MODELS_DIR, f"best_model_{env_tag}.zip")
@@ -521,9 +521,9 @@ def train(cfg_train: TrainConfig) -> str:
     import pandas as pd
 
     if not cfg_train.portfolio_path:
-        raise FileNotFoundError("❌ Debes indicar --portfolio con un CSV/XLSX de préstamos")
+        raise FileNotFoundError("[ERR] Debes indicar --portfolio con un CSV/XLSX de préstamos")
     if not os.path.exists(cfg_train.portfolio_path):
-        raise FileNotFoundError(f"❌ No existe {cfg_train.portfolio_path}")
+        raise FileNotFoundError(f"[ERR] No existe {cfg_train.portfolio_path}")
 
     df = (
         pd.read_excel(cfg_train.portfolio_path)
@@ -711,7 +711,7 @@ def train(cfg_train: TrainConfig) -> str:
     logger.info(f"[META] Metadata: {metadata_path}")
 
     # ============================================================
-    # 🔐 CONTRACT BLINDADO: Generate .meta.json for VecNormalize
+    # [U1F510] CONTRACT BLINDADO: Generate .meta.json for VecNormalize
     # ============================================================
     
     # Ruta del contrato canónico: models/obs_feature_order_loan.json
@@ -784,4 +784,4 @@ if __name__ == "__main__":
     )
 
     best = train(cfg_train)
-    logger.info(f"🏁 Entrenamiento completado — Best model: {best}")
+    logger.info(f"[U1F3C1] Entrenamiento completado — Best model: {best}")

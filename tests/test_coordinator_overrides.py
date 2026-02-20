@@ -64,7 +64,7 @@ def test_override_prudential_first():
     # We need to ensure getattr(g, "COORDINATOR_PRIORITY") returns "PRUDENCIAL_FIRST"
     # _combine_decisions calls _get_guardrails internally. We should mock that.
     
-    # 🆕 Overwrite mandate logic TEMPORARILY
+    # [U1F195] Overwrite mandate logic TEMPORARILY
     original_tier1 = BANK_STRATEGIES[BankProfile.PRUDENTE].mandate_tier1_share
     original_target = BANK_STRATEGIES[BankProfile.PRUDENTE].mandate_share_target
     
@@ -250,4 +250,4 @@ if __name__ == "__main__":
     test_override_prudential_first()
     test_override_macro_first()
     test_audit_artifacts_completeness()
-    print("✅ All deterministic override tests passed.")
+    print("[OK] All deterministic override tests passed.")

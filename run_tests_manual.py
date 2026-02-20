@@ -12,7 +12,7 @@ try:
     t_restruct.test_restructure_success()
     t_restruct.test_restructure_fail_pti()
     t_restruct.test_restructure_fail_dscr()
-    print("✅ test_guardrails_restructure PASSED")
+    print("[OK] test_guardrails_restructure PASSED")
 except Exception:
     traceback.print_exc()
 
@@ -24,6 +24,6 @@ try:
     t_sell.test_sell_success()
     t_sell.test_sell_fail_fire_sale_blocked()
     t_sell.test_sell_fail_price_negative()
-    print("✅ test_guardrails_sell PASSED")
+    print("[OK] test_guardrails_sell PASSED")
 except Exception:
     traceback.print_exc()

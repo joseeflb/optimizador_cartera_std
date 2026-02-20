@@ -498,6 +498,9 @@ def harmonize_portfolio_schema(df: pd.DataFrame) -> pd.DataFrame:
 
     # --- normalización mínima de segment (para gates retail vs corp)
     if "segment" in df.columns:
+        if isinstance(df["segment"], pd.DataFrame):
+            # Duplicate column detected, keep the first one
+            df = df.loc[:, ~df.columns.duplicated()]
         df["segment"] = df["segment"].astype(str).str.strip()
 
     return df
@@ -1054,18 +1057,18 @@ def _combine_decisions(
     macro_selected_list: List[bool] = []
     convergencia_list: List[str] = []
 
-    # 🆕 Task 4: Structured Override Log In-Memory
+    # [NEW] Task 4: Structured Override Log In-Memory
     override_log_entries: List[Dict[str, Any]] = []
     override_level_list: List[str] = []
     override_from_list: List[str] = []
     override_to_list: List[str] = []
     
-    # 🆕 Task 2: Propagar “macro flags”
+    # [NEW] Task 2: Propagar “macro flags”
     macro_rationales_list: List[str] = []
     macro_steps_sold_list: List[str] = []
     macro_steps_restructured_list: List[str] = []
     
-    # 🆕 Task 2 Audit: Explicit Macro Flags
+    # [NEW] Task 2 Audit: Explicit Macro Flags
     macro_action_used_list: List[str] = []
     macro_conflict_list: List[bool] = []
     macro_applied_list: List[bool] = []
@@ -1100,7 +1103,7 @@ def _combine_decisions(
     missing_viability_list: List[bool] = []
     restruct_viable_list: List[bool] = []  # útil para hard-guardrails posteriores
 
-    # ✅ BANK-READY: Parámetros de reestructura (propagar desde micro)
+    # [OK] BANK-READY: Parámetros de reestructura (propagar desde micro)
     plazo_optimo_list: List[float] = []
     tasa_nueva_list: List[float] = []
     quita_list: List[float] = []
@@ -1124,7 +1127,7 @@ def _combine_decisions(
             macro_assignment = "NO_ASIGNADO"
             macro_action_used = accion_micro  # neutral para no inventar steering
             macro_rationale = (
-                f"Macro not applied (n_steps={n_steps}, top_k={top_k}) ⇒ "
+                f"Macro not applied (n_steps={n_steps}, top_k={top_k}) => "
                 f"macro_action defaults to micro action (no portfolio steering)."
             )
         else:
@@ -1516,7 +1519,7 @@ def _combine_decisions(
         steps_micro = _safe_str(r.get("Explain_Steps", ""))
         micro_detail = exp_micro_raw.strip() or steps_micro.strip()
 
-        if (not micro_detail) or (micro_detail == "❓"):
+        if (not micro_detail) or (micro_detail == "??"):
             pead_txt = "NA"
             try:
                 if (ead > 0) and (not np.isnan(price_to_ead)):
@@ -1590,7 +1593,7 @@ def _combine_decisions(
         constraint_reason_list.append(str(constraint_reason))
         constraint_metrics_json_list.append(str(constraint_metrics_json))
 
-        # ✅ BANK-READY: Parámetros de reestructura (desde micro)
+        # [OK] BANK-READY: Parámetros de reestructura (desde micro)
         plazo_optimo_list.append(_safe_float(r.get("plazo_optimo", np.nan), np.nan))
         tasa_nueva_list.append(_safe_float(r.get("tasa_nueva", np.nan), np.nan))
         quita_list.append(_safe_float(r.get("quita", np.nan), np.nan))
@@ -1631,17 +1634,17 @@ def _combine_decisions(
     constraint_reason_list = _pad_or_trim(constraint_reason_list, "")
     constraint_metrics_json_list = _pad_or_trim(constraint_metrics_json_list, "")
 
-    # ✅ BANK-READY: Saneo parámetros de reestructura
+    # [OK] BANK-READY: Saneo parámetros de reestructura
     plazo_optimo_list = _pad_or_trim(plazo_optimo_list, np.nan)
     tasa_nueva_list = _pad_or_trim(tasa_nueva_list, np.nan)
     quita_list = _pad_or_trim(quita_list, np.nan)
 
-    # 🆕 Task 2: Propagar macro columns (listas)
+    # [NEW] Task 2: Propagar macro columns (listas)
     macro_rationales_list = _pad_or_trim(macro_rationales_list, "")
     macro_steps_sold_list = _pad_or_trim(macro_steps_sold_list, "")
     macro_steps_restructured_list = _pad_or_trim(macro_steps_restructured_list, "")
     
-    # 🆕 Task 2 Audit: Explicit Macro Flags
+    # [NEW] Task 2 Audit: Explicit Macro Flags
     macro_action_used_list = _pad_or_trim(macro_action_used_list, "")
     macro_conflict_list = _pad_or_trim(macro_conflict_list, False)
     macro_applied_list = _pad_or_trim(macro_applied_list, False)
@@ -1652,20 +1655,20 @@ def _combine_decisions(
     df["Macro_Selected"] = macro_selected_list
     df["Convergencia_Caso"] = convergencia_list
     
-    # 🆕 Task 2 Audit: Persistir en DF con naming consistente
+    # [NEW] Task 2 Audit: Persistir en DF con naming consistente
     df["macro_action_used"] = macro_action_used_list
     df["macro_conflict"] = macro_conflict_list
     df["macro_applied"] = macro_applied_list
     df["Macro_Rationales"] = macro_rationales_list  # Standard naming requested
     
-    # 🆕 Task 2: Persistir en DF legacy columns kept for backward compatibility if needed
+    # [NEW] Task 2: Persistir en DF legacy columns kept for backward compatibility if needed
     df["Macro_Rationales"] = macro_rationales_list
     df["Macro_Steps_Sold"] = macro_steps_sold_list
     df["Macro_Steps_Restruct"] = macro_steps_restructured_list
 
     df["Accion_final"] = accion_final_list
     
-    # 🆕 Task 1: Boolean Columns + Defaults (para no tener NaNs)
+    # [NEW] Task 1: Boolean Columns + Defaults (para no tener NaNs)
     df["override_applied"] = [bool(lvl != "") for lvl in override_level_list]
     df["override_level"] = override_level_list
     df["override_from"] = override_from_list
@@ -1716,12 +1719,12 @@ def _combine_decisions(
     df["constraint_reason"] = constraint_reason_list
     df["constraint_metrics_json"] = constraint_metrics_json_list
 
-    # ✅ BANK-READY: Parámetros de reestructura
+    # [OK] BANK-READY: Parámetros de reestructura
     df["plazo_optimo"] = plazo_optimo_list
     df["tasa_nueva"] = tasa_nueva_list
     df["quita"] = quita_list
 
-    # ✅ BANK-READY: Campos de escalación y comité (inicialización)
+    # [OK] BANK-READY: Campos de escalación y comité (inicialización)
     df["case_status"] = "NORMAL"  # NORMAL | HOLD_NO_EXECUTABLE_ACTION | ESCALATED
     df["next_step"] = ""  # WORKOUT_REVIEW | LEGAL_ACTION | PRICING_REVIEW
     df["next_step_reason"] = ""  # motivo específico de escalación
@@ -1770,7 +1773,7 @@ def _combine_decisions(
     df.loc[df["capital_release_cf"].isna(), "capital_release_cf"] = (rwa_pre * float(ratio_total))
 
     # ===========================================================
-    # 🆕 EJECUTABILIDAD: RECOMENDACIÓN vs EJECUCIÓN
+    # [NEW] EJECUTABILIDAD: RECOMENDACIÓN vs EJECUCIÓN
     # ===========================================================
     # Separación clara entre:
     # - RECOMENDACIÓN: Lo que el modelo/analista recomienda (exported siempre)
@@ -1796,14 +1799,14 @@ def _combine_decisions(
     loss_cap_pct = strategy.loss_cap_pct
     min_acceptance_score = strategy.min_acceptance_score
     max_restructure_share = strategy.max_restructure_share
-    # 🆕 PC7 SECOND PASS - Mandatos con tiering + percentiles (NO thresholds absolutos)
+    # [NEW] PC7 SECOND PASS - Mandatos con tiering + percentiles (NO thresholds absolutos)
     mandate_share_target = strategy.mandate_share_target  # % objetivo (0.25 DESINV)
     mandate_tier1_share = strategy.mandate_tier1_share  # % genuinamente obligatorio (0.05)
     mandate_w_rwa = strategy.mandate_w_rwa  # peso RWA en score
     mandate_w_age = strategy.mandate_w_age  # peso age_npl en score
     mandate_w_recovery = strategy.mandate_w_recovery  # peso (1-recovery) en score
     mandate_loss_tolerance = strategy.mandate_loss_tolerance
-    # 🆕 NPL BANK-GRADE - Disciplina económica
+    # [NEW] NPL BANK-GRADE - Disciplina económica
     recovery_min_pct = strategy.recovery_min_pct  # recovery mínimo para venta voluntaria
     max_sell_share = strategy.max_sell_share  # cap de ventas VOLUNTARIAS (mandatos exentos)
     
@@ -1845,7 +1848,7 @@ def _combine_decisions(
     
     rw_ratio = pd.to_numeric(df.get("RW", np.nan), errors="coerce")
     
-    # 🆕 FORZAR RECÁLCULO de recovery_sale como precio_optimo / EAD 
+    # [NEW] FORZAR RECALCULO de recovery_sale como precio_optimo / EAD 
     # (ignorar recovery_sale pre-existente en portfolio que puede ser obsoleto)
     logger.info(f"   [INFO] Calculando recovery_sale = precio_optimo/EAD (NPL actual)")
     precio_opt = pd.to_numeric(df.get("precio_optimo", np.nan), errors="coerce")
@@ -1864,7 +1867,7 @@ def _combine_decisions(
         age_npl = pd.Series([0.0] * len(df))  # Default 0 si no hay columna
         logger.warning(f"   [WARNING] Ni age_npl_m ni DPD encontrados - age_npl=0 (mandato por age desactivado)")
     
-    # 🆕 PC7 SECOND PASS: score_mandate basado en percentiles (NO thresholds absolutos)
+    # [NEW] PC7 SECOND PASS: score_mandate basado en percentiles (NO thresholds absolutos)
     # score_mandate = w_rwa * RW_normalized + w_age * age_normalized + w_recovery * (1 - recovery_rate)
     # Normalización: min-max a [0,1] para componibilidad
     
@@ -1949,7 +1952,7 @@ def _combine_decisions(
     loss_threshold = df["sale_mandate"].apply(lambda x: mandate_loss_tolerance if x else loss_cap_pct)
     df["sale_within_loss_cap"] = df["sale_loss_pct"] <= loss_threshold
     
-    # Gate 3 🆕 NPL BANK-GRADE: recovery_rate = sale_price / EAD (disciplina económica)
+    # Gate 3 [NEW] NPL BANK-GRADE: recovery_rate = sale_price / EAD (disciplina económica)
     recovery_rate = sale_price / ead_val.replace(0, np.nan)
     df["recovery_rate"] = recovery_rate.clip(0, 1).fillna(0)
     df["sale_meets_recovery_min"] = df["recovery_rate"] >= recovery_min_pct
@@ -1985,7 +1988,7 @@ def _combine_decisions(
                 elif not row.get("sale_within_loss_cap"):
                     return "SALE_BLOCKED_LOSS_CAP"
                 elif not row.get("sale_meets_recovery_min"):
-                    return "SALE_BLOCKED_RECOVERY_TOO_LOW"  # 🆕 NPL bank-grade gate
+                    return "SALE_BLOCKED_RECOVERY_TOO_LOW"  # [NEW] NPL bank-grade gate
                 else:
                     return "SALE_BLOCKED_OTHER"  # fallback
     
@@ -2016,13 +2019,13 @@ def _combine_decisions(
     score = pd.Series(50.0, index=df.index)
     
     # Penalización quita: -30 si quita=30%, 0 si quita=0%
-    score -= quita_val * 100  # quita 0.30 → -30 puntos
+    score -= quita_val * 100  # quita 0.30 -> -30 puntos
     
     # Penalización plazo: -20 si plazo=240m, -10 si 120m, 0 si 60m
-    score -= (plazo_val - 60) / 180 * 20  # plazo 240 → -20, plazo 120 → -6.7
+    score -= (plazo_val - 60) / 180 * 20  # plazo 240 -> -20, plazo 120 -> -6.7
     
     # Penalización tasa alta: -10 si tasa=10%, 0 si tasa=5%
-    score -= (tasa_val - 0.05) / 0.05 * 10  # tasa 10% → -10
+    score -= (tasa_val - 0.05) / 0.05 * 10  # tasa 10% -> -10
     
     # Bonificación DSCR: +20 si DSCR>1.5, +10 si DSCR=1.2, 0 si DSCR=1.0
     if isinstance(dscr_post, pd.Series):
@@ -2075,11 +2078,11 @@ def _combine_decisions(
         # CASO 1: MANDATO DE VENTA (sí o sí)
         if row.get("sale_mandate", False):
             if row.get("sale_executable", False):
-                # Mandato + ejecutable → VENDER
+                # Mandato + ejecutable -> VENDER
                 final_actions.append("VENDER")
                 execution_status.append("MANDATE_EXECUTED")
             else:
-                # Mandato bloqueado por loss-cap o insulting → MANTENER temporal
+                # Mandato bloqueado por loss-cap o insulting -> MANTENER temporal
                 final_actions.append("MANTENER")
                 execution_status.append("MANDATE_BLOCKED")
         
@@ -2091,11 +2094,11 @@ def _combine_decisions(
                     final_actions.append("VENDER")
                     execution_status.append("NORMAL")
                 elif row.get("restruct_executable", False):
-                    # Fallback: venta no ejecutable → reestructura
+                    # Fallback: venta no ejecutable -> reestructura
                     final_actions.append("REESTRUCTURAR")
                     execution_status.append("FALLBACK_RESTRUCT")
                 else:
-                    # Ni venta ni restructura → mantener
+                    # Ni venta ni restructura -> mantener
                     final_actions.append("MANTENER")
                     execution_status.append("NO_EXECUTABLE_ACTION")
             
@@ -2104,11 +2107,11 @@ def _combine_decisions(
                     final_actions.append("REESTRUCTURAR")
                     execution_status.append("NORMAL")
                 elif row.get("sale_executable", False):
-                    # Fallback: reestructura no ejecutable → venta
+                    # Fallback: reestructura no ejecutable -> venta
                     final_actions.append("VENDER")
                     execution_status.append("FALLBACK_SALE")
                 else:
-                    # Ni reestructura ni venta → mantener
+                    # Ni reestructura ni venta -> mantener
                     final_actions.append("MANTENER")
                     execution_status.append("NO_EXECUTABLE_ACTION")
             
@@ -2152,7 +2155,7 @@ def _combine_decisions(
     # -----------------------------------------------------------
     # 6) CAPACIDAD OPERATIVA (max_restructure_share)
     # -----------------------------------------------------------
-    logger.info(f"🏭 Aplicando capacidad operativa (max {max_restructure_share:.0%} reestructuras)...")
+    logger.info(f"[FACTORY] Aplicando capacidad operativa (max {max_restructure_share:.0%} reestructuras)...")
     
     restruct_mask = df["Accion_final"] == "REESTRUCTURAR"
     n_restruct_current = restruct_mask.sum()
@@ -2181,17 +2184,17 @@ def _combine_decisions(
         logger.info(f"   [OK] Capacidad OK: {n_restruct_current}/{max_allowed} reestructuras")
 
     # -----------------------------------------------------------
-    # 7) 🆕 PC7 SECOND PASS - CAP DE VENTAS (max_sell_share solo VOLUNTARIAS, mandatos exentos)
+    # 7) [NEW] PC7 SECOND PASS - CAP DE VENTAS (max_sell_share solo VOLUNTARIAS, mandatos exentos)
     # -----------------------------------------------------------
     if max_sell_share < 1.0:  # Solo si hay cap
-        logger.info(f"🆕 Aplicando cap de ventas VOLUNTARIAS (max {max_sell_share:.0%}, mandatos exentos)...")
+        logger.info(f"[NEW] Aplicando cap de ventas VOLUNTARIAS (max {max_sell_share:.0%}, mandatos exentos)...")
         
         sell_mask = df["Accion_final"] == "VENDER"
         n_ventas_total = sell_mask.sum()
         n_ventas_mandate = (sell_mask & df["sale_mandate"]).sum()
         n_ventas_voluntary = n_ventas_total - n_ventas_mandate
         
-        # 🆕 PC7 SECOND PASS: mandatos NO cuentan contra el cap (dominan)
+        # [NEW] PC7 SECOND PASS: mandatos NO cuentan contra el cap (dominan)
         max_allowed_voluntary = int(len(df) * max_sell_share)
         
         if n_ventas_voluntary > max_allowed_voluntary and max_allowed_voluntary >= 0:
@@ -2238,7 +2241,7 @@ def _combine_decisions(
     # ===========================================================
     # HARD GUARDRAILS (Centralized via optimizer/guardrails.py)
     # ===========================================================
-    logger.info("🛡️ Aplicando guardrails centralizados (Check Hard Constraints)...")
+    logger.info("[GUARD] Aplicando guardrails centralizados (Check Hard Constraints)...")
 
     def _set_action_all(mask: pd.Series, action: str) -> None:
         """Set de acción en TODAS las columnas espejo que puedan existir."""
@@ -2355,7 +2358,7 @@ def _combine_decisions(
                 current_gov = str(df.at[idx, "Decision_Governance"]) if pd.notna(df.at[idx, "Decision_Governance"]) else ""
                 df.at[idx, "Decision_Governance"] = (current_gov + f"; BLOCK: {reason_str}").strip("; ")
 
-    logger.info(f"🛡️ Guardrails aplicados: {n_blocked_restruct} reestructuras bloqueadas, {n_blocked_sell} ventas bloqueadas.")
+    logger.info(f"[GUARD] Guardrails aplicados: {n_blocked_restruct} reestructuras bloqueadas, {n_blocked_sell} ventas bloqueadas.")
 
 
     # ===========================================================
@@ -2390,7 +2393,7 @@ def _combine_decisions(
         ).fillna(0.0)
 
     # ===========================================================
-    # ✅ BANK-READY: Post-procesamiento escalación
+    # [OK] BANK-READY: Post-procesamiento escalación
     # Identificar casos que fueron bloqueados pero no tienen metadata de escalación
     # ===========================================================
     try:
@@ -2404,7 +2407,7 @@ def _combine_decisions(
             escalate_mask = sell_blocked & not_viable & is_mantener & still_normal
             
             if escalate_mask.any():
-                logger.info(f"[ESCALATION] Aplicando metadata de escalación a {escalate_mask.sum()} casos críticos (Sell_Blocked + restruct_viable=False → MANTENER)")
+                logger.info(f"[ESCALATION] Aplicando metadata de escalación a {escalate_mask.sum()} casos críticos (Sell_Blocked + restruct_viable=False -> MANTENER)")
                 
                 df.loc[escalate_mask, "case_status"] = "HOLD_NO_EXECUTABLE_ACTION"
                 df.loc[escalate_mask, "next_step"] = "WORKOUT_REVIEW"
@@ -2551,9 +2554,9 @@ def run_coordinator_inference(
         out_dir_coord = os.path.join(REPORTS_DIR, f"coordinated_inference_{tag}_{ts}_{posture_suffix}")
     os.makedirs(out_dir_coord, exist_ok=True)
     
-    # 🆕 Task 4: KPI Portfolio Before/After (Audit Grade)
+    # [NEW] Task 4: KPI Portfolio Before/After (Audit Grade)
     try:
-        # 🆕 Task 4: Semantic KPI Structure (Safe for PowerBI/Audit)
+        # [NEW] Task 4: Semantic KPI Structure (Safe for PowerBI/Audit)
         
         # 1. Pre-State (Baseline / Status Quo)
         cols_pre = {"EVA": "EVA", "RWA": "RWA", "EAD": "EAD"}
@@ -2607,11 +2610,11 @@ def run_coordinator_inference(
         kpi_json = os.path.join(out_dir_coord, f"portfolio_kpis_{posture_suffix}.json")
         with open(kpi_json, "w", encoding="utf-8") as f:
             json.dump(portfolio_stats, f, indent=2)
-        logger.info(f"📊 Portfolio KPIs saved (Semantic Format): {kpi_json}")
+        logger.info(f"[KPI] Portfolio KPIs saved (Semantic Format): {kpi_json}")
     except Exception as e:
-        logger.warning(f"⚠️ Error computing portfolio KPIs: {e}", exc_info=True)
+        logger.warning(f"[WARN] Error computing portfolio KPIs: {e}", exc_info=True)
 
-    # 🆕 Task 1 & 3: Sanitize Audit Columns & Standardize IDs
+    # [NEW] Task 1 & 3: Sanitize Audit Columns & Standardize IDs
     if "run_id" not in df_final.columns:
         df_final["run_id"] = f"{tag}_{ts}"
     
@@ -2645,7 +2648,7 @@ def run_coordinator_inference(
     excel_final = os.path.join(out_dir_coord, f"decisiones_finales_{posture_suffix}.xlsx")
     export_styled_excel(df_final, excel_final)
     
-    # 🆕 Task 3: Override Log Export (ALWAYS) with consistent schema
+    # [NEW] Task 3: Override Log Export (ALWAYS) with consistent schema
     csv_overrides = os.path.join(out_dir_coord, f"overrides_log_{posture_suffix}.csv")
     
     if override_log:
@@ -2668,12 +2671,12 @@ def run_coordinator_inference(
         df_ov = pd.DataFrame(columns=OVERRIDE_LOG_COLS)
         
     df_ov.to_csv(csv_overrides, index=False, encoding="utf-8-sig")
-    logger.info(f"⚡ Override Log saved: {csv_overrides} ({len(df_ov)} triggers)")
+    logger.info(f"[LOG] Override Log saved: {csv_overrides} ({len(df_ov)} triggers)")
 
     if export_audit_csv:
         csv_final = os.path.join(out_dir_coord, f"decisiones_audit_{posture_suffix}.csv")
         df_final.to_csv(csv_final, index=False, encoding="utf-8-sig")
-        logger.info(f"🧾 Audit CSV: {csv_final}")
+        logger.info(f"[AUDIT] Audit CSV: {csv_final}")
         
         # (The override log is already saved above with correct schema, no need to overwrite with potentially incorrect schema)
 
@@ -2710,15 +2713,15 @@ def run_coordinator_inference_multi_posture(cfg_base: CoordinatorInferenceConfig
     deliverable_dir = os.path.join(runs_root, f"{ts}_{cfg_base.tag}_DELIVERABLE")
     os.makedirs(deliverable_dir, exist_ok=True)
 
-    logger.info(f"▶ MULTI-POSTURE RUN ROOT: {run_base_dir}")
-    logger.info(f"📦 DELIVERABLE ROOT:      {deliverable_dir}")
+    logger.info(f"[RUN] MULTI-POSTURE RUN ROOT: {run_base_dir}")
+    logger.info(f"[PKG] DELIVERABLE ROOT:      {deliverable_dir}")
     logger.info(f"  • deliverable_only:    {cfg_base.deliverable_only}")
     logger.info(f"  • export_audit_csv:    {cfg_base.export_audit_csv}")
 
     import glob
 
     for posture in postures:
-        logger.info(f"▶ Ejecutando COORDINATOR (risk_posture={posture})…")
+        logger.info(f"[RUN] Ejecutando COORDINATOR (risk_posture={posture})...")
 
         posture_base = os.path.join(run_base_dir, posture)
         os.makedirs(posture_base, exist_ok=True)
@@ -2753,9 +2756,9 @@ def run_coordinator_inference_multi_posture(cfg_base: CoordinatorInferenceConfig
         dest_excel = os.path.join(deliverable_dir, f"decisiones_finales_{posture}.xlsx")
         if excel_path and os.path.exists(excel_path):
             shutil.copy2(excel_path, dest_excel)
-            logger.info(f"  ✓ Excel ({posture}) => {dest_excel}")
+            logger.info(f"  [OK] Excel ({posture}) => {dest_excel}")
         else:
-            logger.warning(f"  ⚠ No se encontró excel_path para postura={posture}: {excel_path}")
+            logger.warning(f"  [WARN] No se encontro excel_path para postura={posture}: {excel_path}")
 
         # Copia AUDIT CSV al DELIVERABLE
         if bool(cfg_base.export_audit_csv):
@@ -2767,20 +2770,20 @@ def run_coordinator_inference_multi_posture(cfg_base: CoordinatorInferenceConfig
                     src_audit = candidates[0]
                     dest_audit = os.path.join(deliverable_dir, f"decisiones_audit_{posture}.csv")
                     shutil.copy2(src_audit, dest_audit)
-                    logger.info(f"  ✓ Audit CSV ({posture}) => {dest_audit}")
+                    logger.info(f"  [OK] Audit CSV ({posture}) => {dest_audit}")
                 else:
-                    logger.warning(f"  ⚠ No se encontró audit CSV en out_dir para postura={posture}: {out_dir}")
+                    logger.warning(f"  [WARN] No se encontro audit CSV en out_dir para postura={posture}: {out_dir}")
             else:
-                logger.warning(f"  ⚠ out_dir inválido para postura={posture}: {out_dir}")
+                logger.warning(f"  [WARN] out_dir invalido para postura={posture}: {out_dir}")
 
-    logger.info("✅ DELIVERABLE generado (3 Excels).")
+    logger.info("[DONE] DELIVERABLE generado (3 Excels).")
 
     if cfg_base.deliverable_only:
         try:
             shutil.rmtree(run_base_dir, ignore_errors=True)
-            logger.info(f"🧹 Limpieza deliverable-only: eliminado run_dir={run_base_dir}")
+            logger.info(f"[CLEAN] Limpieza deliverable-only: eliminado run_dir={run_base_dir}")
         except Exception as e:
-            logger.warning(f"⚠ No se pudo eliminar run_dir={run_base_dir}: {e}")
+            logger.warning(f"[WARN] No se pudo eliminar run_dir={run_base_dir}: {e}")
         return [deliverable_dir]
 
     return outputs + [deliverable_dir]

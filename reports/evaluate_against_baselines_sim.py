@@ -264,12 +264,12 @@ def main():
     parser.add_argument("--report", default="reports/evaluation_report.md", help="Markdown report path")
     
     args = parser.parse_args()
-    logger.info(f"🚀 Starting Evaluation (Simulated). Tag: {args.tag}, Mode: {args.select}")
+    logger.info(f"[U1F680] Starting Evaluation (Simulated). Tag: {args.tag}, Mode: {args.select}")
     
     # 1. Get RL Results
     rl_metrics = get_rl_results(args.tag, select=args.select)
     if not rl_metrics:
-        logger.warning("⚠️ No RL results found.")
+        logger.warning("[WARN][UFE0F] No RL results found.")
     else:
         logger.info(f"Found {len(rl_metrics)} RL runs.")
 
@@ -317,7 +317,7 @@ def main():
     
     # Report
     with open(args.report, "w", encoding="utf-8") as f:
-        f.write("# 📊 Evaluation Report: RL vs Baselines (Simulated)\n\n")
+        f.write("# [U1F4CA] Evaluation Report: RL vs Baselines (Simulated)\n\n")
         f.write(f"**Tag:** `{args.tag}`\n")
         f.write(f"**Date:** {datetime.now().strftime('%Y-%m-%d %H:%M')}\n\n")
         f.write("## Summary Table\n\n")
@@ -331,7 +331,7 @@ def main():
             best_eva = df_res.loc[df_res["final_total_eva"].idxmax()]
             f.write(f"- **Best EVA:** {best_eva['method']} ({best_eva['final_total_eva']:,.0f}€)\n")
         
-    logger.info(f"✅ Report saved to {args.report}")
+    logger.info(f"[OK] Report saved to {args.report}")
     logger.info(f"Summary:\n{df_res.to_string(index=False)}")
 
 if __name__ == "__main__":

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import os
 import sys
-import json  # ✅ Metadata check
+import json  # [OK] Metadata check
 import time
 import argparse
 import logging
@@ -91,8 +91,7 @@ try:
     from stable_baselines3 import PPO
     from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 except ImportError as e:
-    raise SystemExit("❌ Faltan dependencias RL. Ejecuta install_requirements_smart.py.") from e
-
+    raise SystemExit("[ERR] Faltan dependencias RL. Ejecuta install_requirements_smart.py.") from e
 CFG = cfg.CONFIG
 
 
@@ -549,6 +548,9 @@ def harmonize_portfolio_schema(df: pd.DataFrame) -> pd.DataFrame:
             df["book_value"] = pd.to_numeric(df["EAD"], errors="coerce") * (1.0 - lgd)
 
     if "segment" in df.columns:
+        if isinstance(df["segment"], pd.DataFrame):
+            # Duplicate column detected, keep the first one
+            df = df.loc[:, ~df.columns.duplicated()]
         df["segment"] = df["segment"].astype(str).str.strip()
 
     return df
@@ -556,7 +558,7 @@ def harmonize_portfolio_schema(df: pd.DataFrame) -> pd.DataFrame:
 
 def load_portfolio_any(path: str) -> pd.DataFrame:
     if not os.path.exists(path):
-        raise FileNotFoundError(f"❌ Cartera no encontrada: {path}")
+        raise FileNotFoundError(f"[ERR] Cartera no encontrada: {path}")
 
     try:
         # Intento de ingesta robusta (detecta formato, aplica mapping global, valida nulos/tipos)
@@ -569,7 +571,7 @@ def load_portfolio_any(path: str) -> pd.DataFrame:
     df.columns = [str(c).strip() for c in df.columns]
 
     # -----------------------------------------------------------
-    # 🔒 INPUT SCHEMA LOCK (Contract Check)
+    # [LOCK] INPUT SCHEMA LOCK (Contract Check)
     # -----------------------------------------------------------
     feature_order_path = os.path.join(MODELS_DIR, "feature_order.json")
     if os.path.exists(feature_order_path):
@@ -592,7 +594,7 @@ def load_portfolio_any(path: str) -> pd.DataFrame:
     required_min = [cfg.ID_COL, "EAD", "PD", "LGD", "RW", "EVA", "DPD"]
     missing = [c for c in required_min if c not in df.columns]
     if missing:
-        raise ValueError(f"❌ Columnas mínimas faltantes en cartera: {missing}")
+        raise ValueError(f"[ERR] Columnas mínimas faltantes en cartera: {missing}")
 
     if "rating_num" not in df.columns:
         df["rating_num"] = df.get("rating", "BBB").apply(_rating_num).astype(float)
@@ -623,7 +625,7 @@ def load_portfolio_any(path: str) -> pd.DataFrame:
 
 def load_policy(model_path: str, cfg_inf: InferenceConfig) -> Tuple[PPO, Optional[VecNormalize]]:
     if not os.path.exists(model_path):
-        raise FileNotFoundError(f"❌ Modelo PPO no encontrado: {model_path}")
+        raise FileNotFoundError(f"[ERR] Modelo PPO no encontrado: {model_path}")
 
     dummy_env = DummyVecEnv([lambda: LoanEnv()])
 
@@ -733,7 +735,7 @@ def _run_inference_for_posture(
         except Exception:
             base_secured = False
 
-        # ✅ FIX CRÍTICO: Uso de nombres correctos de columnas (con fallback para compatibilidad)
+        # [OK] FIX CRÍTICO: Uso de nombres correctos de columnas (con fallback para compatibilidad)
         ingreso_mensual = row.get("monthly_income", row.get("ingreso_mensual", None))
         cfo_m = row.get("monthly_cfo", row.get("cashflow_operativo_mensual", None))
 
@@ -752,7 +754,7 @@ def _run_inference_for_posture(
         try:
             # DEBUG: Log viability inputs
             if idx < 5:  # Solo primeros 5 para evitar spam
-                logger.info(f"🔍 DEBUG loan_id={loan_id} | ingreso_mensual={ingreso_mensual} | cfo_m={cfo_m} | PTI_pre={pti_pre} | DSCR_pre={dscr_pre}")
+                logger.info(f"[DEBUG] loan_id={loan_id} | ingreso_mensual={ingreso_mensual} | cfo_m={cfo_m} | PTI_pre={pti_pre} | DSCR_pre={dscr_pre}")
            
             restruct = optimize_restructure(
                 ead=base_ead,
@@ -1201,7 +1203,7 @@ def _run_inference_for_posture(
 
     excel_path = os.path.join(out_dir, excel_name)
     export_styled_excel(df_dec, excel_path)
-    logger.info(f"✅ Resultados exportados a {excel_path}")
+    logger.info(f"[OK] Resultados exportados a {excel_path}")
 
     summary_path = os.path.join(out_dir, summary_name)
     df_summary = pd.DataFrame(
@@ -1223,7 +1225,7 @@ def _run_inference_for_posture(
         }
     )
     df_summary.to_csv(summary_path, index=False, encoding="utf-8-sig")
-    logger.info(f"💾 Resumen agregado guardado en: {summary_path}")
+    logger.info(f"[SAVE] Resumen agregado guardado en: {summary_path}")
 
     return df_dec, excel_path, summary_path
 
@@ -1266,7 +1268,7 @@ def run_inference_multi_posture(cfg_base: InferenceConfig) -> List[str]:
 
     for postura, tag in escenarios:
         cfg_inf = dataclasses.replace(cfg_base, risk_posture=postura, tag=tag, persist_outputs=True)
-        logger.info(f"▶ Ejecutando inferencia (MICRO) — postura={postura}…")
+        logger.info(f"[RUN] Ejecutando inferencia (MICRO) — postura={postura}…")
         _, excel_path, _ = _run_inference_for_posture(cfg_inf, out_dir, suffix=postura)
         outputs.append(excel_path)
 
@@ -1324,6 +1326,6 @@ if __name__ == "__main__":
     cfg_inf = parse_args()
     out_dir = run_inference(cfg_inf)
     if out_dir:
-        logger.info(f"🏁 Inferencia completada. Reporte: {out_dir}")
+        logger.info(f"[DONE] Inferencia completada. Reporte: {out_dir}")
     else:
-        logger.info("🏁 Inferencia completada (no-persist).")
+        logger.info("[DONE] Inferencia completada (no-persist).")

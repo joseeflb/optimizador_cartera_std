@@ -299,7 +299,7 @@ def optimize_restructure(
     segment: Optional[str] = None,
     rating: str = "BBB",
 
-    # ✅ NUEVO: contable para quita (write-off real)
+    # [OK] NUEVO: contable para quita (write-off real)
     book_value: Optional[float] = None,
     coverage_rate: Optional[float] = None,
 
@@ -492,7 +492,7 @@ def optimize_restructure(
                 rwa_avg = float(np.mean(rwa_m)) if rwa_m else 0.0
 
                 # -----------------------------------------------------
-                # ✅ FIX CRÍTICO: QUITA = WRITE-OFF REAL CONTRA BOOK VALUE
+                # [OK] FIX CRÍTICO: QUITA = WRITE-OFF REAL CONTRA BOOK VALUE
                 # -----------------------------------------------------
                 # writeoff_eur: pérdida contable inmediata del carrying amount (proporcional a la quita)
                 # C_quita: writeoff + coste operacional (bps sobre nominal perdonado)
@@ -544,8 +544,8 @@ def optimize_restructure(
                         "admin_cost": float(admin_cost_abs),
                         "writeoff_eur": float(writeoff_eur),
                         "operational_loss_quita": float(operational_loss),
-                        "C_quita": float(C_quita),          # ✅ nombre pedido (commit)
-                        "quita_cost": float(C_quita),       # ✅ alias legacy
+                        "C_quita": float(C_quita),          # [OK] nombre pedido (commit)
+                        "quita_cost": float(C_quita),       # [OK] alias legacy
 
                         # contable usado
                         "book_value_used": float(book_used),
@@ -696,7 +696,7 @@ def optimize_heuristic(
     esfuerzo_max: float = 0.40,
     dscr_min: float = 1.10,
 ) -> pd.DataFrame:
-    logger.info("🧮 Ejecutando heurístico global Banco L1.5 (con lógica NPL)…")
+    logger.info("[U1F9EE] Ejecutando heurístico global Banco L1.5 (con lógica NPL)…")
     results: List[Dict[str, Any]] = []
 
     EVA_MIN_IMPROVEMENT_EUR = float(getattr(REWARD, "eva_min_improvement", 10_000.0))
@@ -762,7 +762,7 @@ def optimize_heuristic(
                 segment=str(seg),
                 rating=str(rating),
 
-                # ✅ pasa contable para quita real
+                # [OK] pasa contable para quita real
                 book_value=None if _is_nan(book_value) else float(book_value),
                 coverage_rate=None if _is_nan(coverage_rate) else float(coverage_rate),
 
@@ -912,7 +912,7 @@ def main() -> None:
     df = pd.read_excel(args.input) if args.input.lower().endswith(".xlsx") else pd.read_csv(args.input)
     df_out = optimize_heuristic(df, budget=args.budget)
     df_out.to_csv(args.out, index=False)
-    logger.info(f"💾 Resultados guardados en {args.out}")
+    logger.info(f"[U1F4BE] Resultados guardados en {args.out}")
 
 
 if __name__ == "__main__":

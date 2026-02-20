@@ -156,7 +156,7 @@ class CoordinatorAgent:
         return pti_f, dscr_f
 
     # ----------------------------------------------------------
-    #        🔥 FUSIÓN MACRO + MICRO + REGLA FINANCIERA
+    #        [U1F525] FUSIÓN MACRO + MICRO + REGLA FINANCIERA
     # ----------------------------------------------------------
     def decide(self, portfolio_obs: np.ndarray, loan_dict: Dict[str, Any]) -> Dict[str, Any]:
         """

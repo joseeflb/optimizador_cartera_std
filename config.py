@@ -5,12 +5,12 @@
 # OPTIMIZADOR DE CARTERAS EN DEFAULT (Método Estándar · Basilea III)
 #
 # Coherente con:
-#   ✔ LoanEnv (micro)
-#   ✔ PortfolioEnv (macro)
-#   ✔ restructure_optimizer
-#   ✔ price_simulator
-#   ✔ policy_inference y train_agent
-#   ✔ arquitectura multi-agente
+#   [OK] LoanEnv (micro)
+#   [OK] PortfolioEnv (macro)
+#   [OK] restructure_optimizer
+#   [OK] price_simulator
+#   [OK] policy_inference y train_agent
+#   [OK] arquitectura multi-agente
 #
 # Nota crítica (NPL):
 #   - DEFAULT es un ESTADO (trigger regulatorio y operativo).
@@ -26,12 +26,13 @@ import json, os, sys, random, logging
 from pathlib import Path
 
 # ================================================================
-# � Validación (Modo estricto vs tolerante)
+# [UFFFD] Validación (Modo estricto vs tolerante)
 # ================================================================# Habilitar fallback a legacy Excel loader si ingest_portfolio falla (NO RECOMENDADO en PROD)
 ALLOW_LEGACY_PORTFOLIO_LOAD = False 
 
 # Permitir clipping silencioso en ingestion/stress (si False, lanza ValueError)
-ALLOW_CLIP_OUT_OF_RANGE = FalseSTRICT_CONTRACT_VALIDATION: bool = True  # True (Fail), False (Warn)
+ALLOW_CLIP_OUT_OF_RANGE = False
+STRICT_CONTRACT_VALIDATION: bool = True  # True (Fail), False (Warn)
 # ================================================================
 #  GUARDRAILS (Hard Constraints Bank-Ready)
 # ================================================================
@@ -54,7 +55,7 @@ GR_SELL_MIN_CAPITAL_RELEASE: float = 0.0              # Liberación de capital n
 #   "MICRO_FIRST"      -> La recomendación técnica (bottom-up) prevalece, macro solo sugiere.
 COORDINATOR_PRIORITY: str = "PRUDENCIAL_FIRST"
 
-# ================================================================# �🔢 Semillas
+# ================================================================# [UFFFD][U1F522] Semillas
 # ================================================================
 GLOBAL_SEED: int = 42
 
@@ -70,7 +71,7 @@ def set_all_seeds(seed: int = GLOBAL_SEED):
         pass
 
 # ================================================================
-# 📁 Directorios
+# [U1F4C1] Directorios
 # ================================================================
 ROOT_DIR = Path(__file__).resolve().parent
 DATA_DIR, REPORTS_DIR, MODELS_DIR, LOGS_DIR, TEMP_DIR = [
@@ -83,7 +84,7 @@ MODEL_FILE = MODELS_DIR / "best_model.zip"
 PIPELINE_LOG = LOGS_DIR / "pipeline.log"
 
 # ================================================================
-# 🧱 Tipos y esquema
+# [U1F9F1] Tipos y esquema
 # ================================================================
 class Segmento(Enum):
     CORPORATE = "corporate"
@@ -113,7 +114,7 @@ FEATURE_COLUMNS = [
 ACTION_ENUM = {"MANTENER": 0, "REESTRUCTURAR": 1, "VENDER": 2}
 
 # ================================================================
-# ✅ Convención NPL (ESTÁNDAR ÚNICO PARA TODO EL REPO)
+# [OK] Convención NPL (ESTÁNDAR ÚNICO PARA TODO EL REPO)
 # ================================================================
 @dataclass
 class NPLConventions:
@@ -217,7 +218,7 @@ class BaselSTDMapping:
         return 1.0
 
 # ================================================================
-# 🧱 Regulación
+# [U1F9F1] Regulación
 # ================================================================
 @dataclass
 class BuffersRegulatorios:
@@ -241,7 +242,7 @@ class Regulacion:
         return self.total_capital_min + self.buffers.total_buffer()
 
 # ================================================================
-# 📊 Simulación sintética
+# [U1F4CA] Simulación sintética
 # ================================================================
 @dataclass
 class SimulacionCartera:
@@ -270,7 +271,7 @@ class SimulacionCartera:
     npl_dpd_range: Tuple[float, float] = (120.0, 900.0)
 
 # ================================================================
-# 🔧 Reestructuración
+# [U1F527] Reestructuración
 # ================================================================
 @dataclass
 class ReestructuraParams:
@@ -308,7 +309,7 @@ class PrecioVentaParams:
     buyer_years_to_recover: Tuple[int, int] = (1, 3)
 
 # ================================================================
-# 🧠 Perfiles de banco (estrategia global)
+# [U1F9E0] Perfiles de banco (estrategia global)
 # ================================================================
 class BankProfile(Enum):
     PRUDENTE = "prudente"
@@ -354,7 +355,7 @@ class BankStrategy:
     esfuerzo_alto: float
     dscr_min: float
 
-    # 🆕 EJECUTABILIDAD - Knobs para gates reales de venta/reestructura
+    # [U1F195] EJECUTABILIDAD - Knobs para gates reales de venta/reestructura
     # Gate venta (no insultante)
     sale_floor_ratio: float  # precio/valor_referencia mínimo (0.40=40% del valor)
     loss_cap_pct: float  # pérdida máxima aceptable (% del EAD) ej. 0.60=60%
@@ -363,7 +364,7 @@ class BankStrategy:
     min_acceptance_score: float  # score mínimo para ejecutabilidad (0-100)
     max_restructure_share: float  # % máximo de cartera a reestructurar (capacidad)
     
-    # 🆕 PC7 SECOND PASS - Mandatos con tiering + percentiles (NO thresholds absolutos)
+    # [U1F195] PC7 SECOND PASS - Mandatos con tiering + percentiles (NO thresholds absolutos)
     mandate_share_target: float  # % objetivo de cartera con mandato (TIER1+TIER2, e.g., 0.25 DESINV)
     mandate_tier1_share: float  # % genuinamente obligatorio (policy breach, severe, e.g., 0.05)
     mandate_w_rwa: float  # peso de RWA en score_mandate (0.0 = desactivado)
@@ -371,7 +372,7 @@ class BankStrategy:
     mandate_w_recovery: float  # peso de (1-recovery) en score_mandate (2.0 = muy penalizado)
     mandate_loss_tolerance: float  # pérdida aceptable con mandato (% EAD)
     
-    # 🆕 NPL BANK-GRADE - Gates adicionales de disciplina económica (recovery + capacity)
+    # [U1F195] NPL BANK-GRADE - Gates adicionales de disciplina económica (recovery + capacity)
     recovery_min_pct: float  # recovery mínimo (sale_price/EAD) para venta voluntaria (gate 2)
     max_sell_share: float  # % máximo de cartera a vender (aplica SOLO a VOLUNTARIAS, mandatos exentos)
 
@@ -400,19 +401,19 @@ BANK_STRATEGIES: Dict[BankProfile, BankStrategy] = {
         esfuerzo_bajo=0.30,
         esfuerzo_alto=0.50,
         dscr_min=1.05,
-        # 🆕 EJECUTABILIDAD - PRUDENCIAL (MUY SELECTIVO - máxima cautela NPL)
+        # [U1F195] EJECUTABILIDAD - PRUDENCIAL (MUY SELECTIVO - máxima cautela NPL)
         sale_floor_ratio=0.25,  # venta si precio >= 25% valor_ref (muy exigente)
         loss_cap_pct=0.85,  # pérdida máx 85% EAD (conservador)
         min_acceptance_score=35.0,  # reestructura términos limpios (vs 65 bloqueante) [PC7 SECOND PASS]
         max_restructure_share=0.50,  # capacidad aumentada (50% cartera) [PC7 SECOND PASS]
-        # 🆕 MANDATOS - PC7 SECOND PASS (percentiles, target ~2-5% PRUDENTIAL conservador)
+        # [U1F195] MANDATOS - PC7 SECOND PASS (percentiles, target ~2-5% PRUDENTIAL conservador)
         mandate_share_target=0.03,  # 3% objetivo (muy selectivo en PRUD)
         mandate_tier1_share=0.01,  # 1% genuinamente obligatorio
         mandate_w_rwa=0.0,  # RWA desactivado (degenerado en sintético)
         mandate_w_age=1.0,  # age_npl dominante (préstamos antiguos)
         mandate_w_recovery=2.0,  # recovery bajo penalizado (worst performers)
         mandate_loss_tolerance=0.92,  # con mandato acepta 92% loss (vs 85% voluntario)
-        # 🆕 NPL BANK-GRADE - Disciplina económica (recovery + capacity)
+        # [U1F195] NPL BANK-GRADE - Disciplina económica (recovery + capacity)
         recovery_min_pct=0.15,  # recovery >= 15% EAD para venta voluntaria (exigente)
         max_sell_share=0.40,  # cap 40% ventas VOLUNTARIAS (conservador) [PC7 SECOND PASS]
     ),
@@ -440,19 +441,19 @@ BANK_STRATEGIES: Dict[BankProfile, BankStrategy] = {
         esfuerzo_bajo=0.35,
         esfuerzo_alto=0.50,
         dscr_min=1.1,
-        # 🆕 EJECUTABILIDAD - BALANCEADO (EQUILIBRADO - más ejecutivo que PRUD, menos que DESINV)
+        # [U1F195] EJECUTABILIDAD - BALANCEADO (EQUILIBRADO - más ejecutivo que PRUD, menos que DESINV)
         sale_floor_ratio=0.18,  # venta si precio >= 18% valor_ref (vs 25% PRUD)
         loss_cap_pct=0.90,  # pérdida máx 90% EAD (equilibrado vs 85% PRUD)
         min_acceptance_score=25.0,  # reestructura más permisiva (vs 35 PRUD) [PC7 SECOND PASS]
         max_restructure_share=0.70,  # capacidad operativa MAYOR (70% cartera) [PC7 SECOND PASS]
-        # 🆕 MANDATOS - PC7 SECOND PASS (percentiles, target ~7-12% BALANCED ejecutivo)
+        # [U1F195] MANDATOS - PC7 SECOND PASS (percentiles, target ~7-12% BALANCED ejecutivo)
         mandate_share_target=0.10,  # 10% objetivo (equilibrado)
         mandate_tier1_share=0.03,  # 3% genuinamente obligatorio
         mandate_w_rwa=0.0,  # RWA desactivado (degenerado en sintético)
         mandate_w_age=1.2,  # age_npl muy importante
         mandate_w_recovery=2.5,  # recovery bajo altamente penalizado
         mandate_loss_tolerance=0.94,  # con mandato acepta 94% loss (vs 90% voluntario)
-        # 🆕 NPL BANK-GRADE - Disciplina económica (recovery + capacity)
+        # [U1F195] NPL BANK-GRADE - Disciplina económica (recovery + capacity)
         recovery_min_pct=0.10,  # recovery >= 10% EAD para venta voluntaria (vs 15% PRUD)
         max_sell_share=0.60,  # cap 60% ventas VOLUNTARIAS (equilibrado) [PC7 SECOND PASS]
     ),
@@ -480,26 +481,26 @@ BANK_STRATEGIES: Dict[BankProfile, BankStrategy] = {
         esfuerzo_bajo=0.40,
         esfuerzo_alto=0.55,
         dscr_min=1.15,
-        # 🆕 EJECUTABILIDAD - DESINVERSION (AGRESIVO pero SELECTIVO - mandatos ~20-30% cartera)
+        # [U1F195] EJECUTABILIDAD - DESINVERSION (AGRESIVO pero SELECTIVO - mandatos ~20-30% cartera)
         sale_floor_ratio=0.12,  # venta si precio >= 12% valor_ref (flexible vs 18% BAL)
         loss_cap_pct=0.93,  # pérdida máx 93% EAD (agresivo vs 90% BAL)
         min_acceptance_score=20.0,  # reestructura más permisiva pero sale prefiere (vs 25 BAL) [PC7 SECOND PASS]
         max_restructure_share=0.30,  # capacidad limitada (prefiere vender)
-        # 🆕 MANDATOS - PC7 SECOND PASS (percentiles, target 20-30% DESINV capital pressure)
+        # [U1F195] MANDATOS - PC7 SECOND PASS (percentiles, target 20-30% DESINV capital pressure)
         mandate_share_target=0.25,  # 25% objetivo (target 20-30% rango DESINV)
         mandate_tier1_share=0.05,  # 5% genuinamente obligatorio (worst of worst)
         mandate_w_rwa=0.0,  # RWA desactivado (degenerado en sintético, activar en piloto con RW real)
         mandate_w_age=1.5,  # age_npl muy importante (old NPL burden)
         mandate_w_recovery=3.0,  # recovery bajo MUY penalizado (worst performers drain capital)
         mandate_loss_tolerance=0.96,  # con mandato acepta 96% loss (vs 93% voluntario)
-        # 🆕 NPL BANK-GRADE - Disciplina económica (recovery + capacity)
+        # [U1F195] NPL BANK-GRADE - Disciplina económica (recovery + capacity)
         recovery_min_pct=0.06,  # recovery >= 6% EAD para venta voluntaria (mínimo razonable)
         max_sell_share=0.70,  # cap 70% ventas VOLUNTARIAS (mandatos exentos) [PC7 SECOND PASS]
     ),
 }
 
 # ================================================================
-# 🧠 Recompensa RL (micro + macro)
+# [U1F9E0] Recompensa RL (micro + macro)
 # ================================================================
 @dataclass
 class RewardParams:
@@ -564,7 +565,7 @@ class RewardParams:
         )
 
 # ================================================================
-# 🤖 PPO
+# [U1F916] PPO
 # ================================================================
 @dataclass
 class PPOParams:
@@ -585,7 +586,7 @@ class PPOParams:
     tensorboard_log: str = str((LOGS_DIR / "tb").as_posix())
 
 # ================================================================
-# 📝 Logging
+# [U1F4DD] Logging
 # ================================================================
 @dataclass
 class LoggingParams:
@@ -608,7 +609,7 @@ class LoggingParams:
         logging.getLogger(__name__).info("Logging configurado.")
 
 # ================================================================
-# 🌐 CONFIG principal (micro + macro)
+# [U1F310] CONFIG principal (micro + macro)
 # ================================================================
 @dataclass
 class ProjectConfig:
@@ -619,7 +620,7 @@ class ProjectConfig:
     sensibilidad_reestructura: SensibilidadReestructura = field(default_factory=SensibilidadReestructura)
     precio_venta: PrecioVentaParams = field(default_factory=PrecioVentaParams)
 
-    # ✅ Convención NPL centralizada
+    # [OK] Convención NPL centralizada
     npl: NPLConventions = field(default_factory=NPLConventions)
 
     # Estrategia global del banco (palanca principal)
@@ -662,7 +663,7 @@ class ProjectConfig:
         logging.getLogger(__name__).info("Validación de configuración OK.")
 
 # ================================================================
-# ⚡ Perfiles FAST / NORMAL (para pipelines)
+# [U26A1] Perfiles FAST / NORMAL (para pipelines)
 # ================================================================
 FAST_CFG = dict(ppo_steps=50_000, mc_sims=300, restre_grid_factor=0.33, horizon_months=6)
 NORMAL_CFG = dict(ppo_steps=1_000_000, mc_sims=3000, restre_grid_factor=1.0, horizon_months=24)
@@ -671,7 +672,7 @@ def speed_profile(fast: bool) -> dict:
     return FAST_CFG if fast else NORMAL_CFG
 
 # ================================================================
-# 💾 Utilidades comunes (feature order)
+# [U1F4BE] Utilidades comunes (feature order)
 # ================================================================
 def save_feature_order(order: List[str], path=MODELS_DIR / "feature_order.json"):
     with open(path, "w", encoding="utf-8") as f:

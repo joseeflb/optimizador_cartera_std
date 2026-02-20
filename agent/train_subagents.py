@@ -47,7 +47,7 @@ import numpy as np
 import pandas as pd
 
 # ---------------------------------------------------------------------
-# 🔧 Rutas de proyecto
+# [U1F527] Rutas de proyecto
 # ---------------------------------------------------------------------
 ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
@@ -61,7 +61,7 @@ os.makedirs(MODELS_DIR, exist_ok=True)
 os.makedirs(LOGS_DIR, exist_ok=True)
 
 # ---------------------------------------------------------------------
-# 📣 Logging
+# [U1F4E3] Logging
 # ---------------------------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
@@ -74,7 +74,7 @@ logging.basicConfig(
 logger = logging.getLogger("train_subagents")
 
 # ---------------------------------------------------------------------
-# 📦 Configuración y entornos
+# [U1F4E6] Configuración y entornos
 # ---------------------------------------------------------------------
 import config as cfg
 from env.loan_env import LoanEnv
@@ -85,27 +85,27 @@ try:
     from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 except ImportError as e:
     raise SystemExit(
-        "❌ Faltan dependencias RL (stable_baselines3, gymnasium, torch). "
+        "[ERR] Faltan dependencias RL (stable_baselines3, gymnasium, torch). "
         "Ejecuta primero install_requirements_smart.py."
     ) from e
 
 
 # ---------------------------------------------------------------------
-# 🧩 Utilidades
+# [U1F9E9] Utilidades
 # ---------------------------------------------------------------------
 def _load_portfolio(path: Optional[str]) -> Optional[pd.DataFrame]:
     """Carga una cartera desde CSV/Excel si se proporciona ruta."""
     if path is None:
         return None
     if not os.path.exists(path):
-        raise FileNotFoundError(f"❌ No se encuentra la cartera: {path}")
+        raise FileNotFoundError(f"[ERR] No se encuentra la cartera: {path}")
     ext = os.path.splitext(path.lower())[1]
     if ext in (".xlsx", ".xls"):
         df = pd.read_excel(path)
     else:
         df = pd.read_csv(path)
     df.columns = [c.strip() for c in df.columns]
-    logger.info(f"📥 Cartera cargada ({len(df):,} préstamos) desde {path}")
+    logger.info(f"[U1F4E5] Cartera cargada ({len(df):,} préstamos) desde {path}")
     return df
 
 
@@ -130,11 +130,11 @@ def _safe_copy(src: str, dst: str) -> None:
         if os.path.exists(src):
             shutil.copyfile(src, dst)
     except Exception as e:
-        logger.warning(f"⚠️ No se pudo copiar {src} -> {dst}: {e}")
+        logger.warning(f"[WARN][UFE0F] No se pudo copiar {src} -> {dst}: {e}")
 
 
 # ---------------------------------------------------------------------
-# 🧠 Entrenamiento subagente MICRO (LoanEnv)
+# [U1F9E0] Entrenamiento subagente MICRO (LoanEnv)
 # ---------------------------------------------------------------------
 def train_loan_agent(
     portfolio_path: Optional[str] = None,
@@ -151,7 +151,7 @@ def train_loan_agent(
         - models/best_model.zip
         - models/vecnormalize_final.pkl
     """
-    logger.info("🏦 [MICRO] Entrenamiento subagente LoanEnv (nivel préstamo)…")
+    logger.info("[U1F3E6] [MICRO] Entrenamiento subagente LoanEnv (nivel préstamo)…")
 
     ppo_cfg = cfg.CONFIG.ppo
     total_ts = int(total_timesteps or ppo_cfg.total_timesteps)
@@ -199,7 +199,7 @@ def train_loan_agent(
         verbose=1,
     )
 
-    logger.info(f"🚀 Iniciando entrenamiento LoanEnv por {total_ts:,} pasos…")
+    logger.info(f"[U1F680] Iniciando entrenamiento LoanEnv por {total_ts:,} pasos…")
     model.learn(total_timesteps=total_ts, progress_bar=True)
 
     # Desactivar modo entrenamiento antes de guardar normalizador
@@ -213,8 +213,8 @@ def train_loan_agent(
     model.save(model_path)
     vec_env.save(vn_path)
 
-    logger.info(f"✅ [MICRO] Modelo LoanEnv guardado en: {model_path}")
-    logger.info(f"✅ [MICRO] VecNormalize MICRO guardado en: {vn_path}")
+    logger.info(f"[OK] [MICRO] Modelo LoanEnv guardado en: {model_path}")
+    logger.info(f"[OK] [MICRO] VecNormalize MICRO guardado en: {vn_path}")
 
     # Compatibilidad LEGACY (para scripts antiguos). Importante:
     # - best_model.zip y vecnormalize_final.pkl se consideran “micro”.
@@ -223,13 +223,13 @@ def train_loan_agent(
         legacy_vn = os.path.join(MODELS_DIR, "vecnormalize_final.pkl")
         _safe_copy(model_path, legacy_model)
         _safe_copy(vn_path, legacy_vn)
-        logger.info(f"↩️ [LEGACY] Copias micro: {legacy_model} | {legacy_vn}")
+        logger.info(f"↩[UFE0F] [LEGACY] Copias micro: {legacy_model} | {legacy_vn}")
 
     return model_path
 
 
 # ---------------------------------------------------------------------
-# 🧠 Entrenamiento subagente MACRO (PortfolioEnv)
+# [U1F9E0] Entrenamiento subagente MACRO (PortfolioEnv)
 # ---------------------------------------------------------------------
 def train_portfolio_agent(
     portfolio_path: Optional[str],
@@ -244,10 +244,10 @@ def train_portfolio_agent(
         - models/best_model_portfolio.zip
         - models/vecnormalize_portfolio.pkl
     """
-    logger.info("📈 [MACRO] Entrenamiento subagente PortfolioEnv (nivel cartera)…")
+    logger.info("[U1F4C8] [MACRO] Entrenamiento subagente PortfolioEnv (nivel cartera)…")
 
     if portfolio_path is None:
-        raise ValueError("❌ Para entrenar el subagente de cartera es obligatorio pasar --portfolio.")
+        raise ValueError("[ERR] Para entrenar el subagente de cartera es obligatorio pasar --portfolio.")
 
     df = _load_portfolio(portfolio_path)
     assert df is not None
@@ -305,7 +305,7 @@ def train_portfolio_agent(
         verbose=1,
     )
 
-    logger.info(f"🚀 Iniciando entrenamiento PortfolioEnv por {total_ts:,} pasos…")
+    logger.info(f"[U1F680] Iniciando entrenamiento PortfolioEnv por {total_ts:,} pasos…")
     model.learn(total_timesteps=total_ts, progress_bar=True)
 
     # Desactivar modo entrenamiento antes de guardar normalizador
@@ -318,14 +318,14 @@ def train_portfolio_agent(
     model.save(model_path)
     vec_env.save(vn_path)
 
-    logger.info(f"✅ [MACRO] Modelo PortfolioEnv guardado en: {model_path}")
-    logger.info(f"✅ [MACRO] VecNormalize MACRO guardado en: {vn_path}")
+    logger.info(f"[OK] [MACRO] Modelo PortfolioEnv guardado en: {model_path}")
+    logger.info(f"[OK] [MACRO] VecNormalize MACRO guardado en: {vn_path}")
 
     return model_path
 
 
 # ---------------------------------------------------------------------
-# 🧭 CLI principal
+# [U1F9ED] CLI principal
 # ---------------------------------------------------------------------
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -388,7 +388,7 @@ def main() -> None:
     args = parse_args()
 
     logger.info("===================================================")
-    logger.info("🧠 Entrenamiento de subagentes RL (Banco L1.5)")
+    logger.info("[U1F9E0] Entrenamiento de subagentes RL (Banco L1.5)")
     logger.info(f"   Agent mode   : {args.agent}")
     logger.info(f"   Portfolio    : {args.portfolio if args.portfolio else 'synthetic / default'}")
     logger.info(f"   Total steps  : {args.total_steps or cfg.CONFIG.ppo.total_timesteps:,}")
@@ -415,7 +415,7 @@ def main() -> None:
             seed=args.seed,
         )
 
-    logger.info("🏁 Entrenamiento de subagentes completado correctamente.")
+    logger.info("[U1F3C1] Entrenamiento de subagentes completado correctamente.")
 
 
 if __name__ == "__main__":

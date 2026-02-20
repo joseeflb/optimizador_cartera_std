@@ -46,9 +46,9 @@ if __name__ == "__main__":
         test_restructure_success()
         test_restructure_fail_pti()
         test_restructure_fail_dscr()
-        print("✅ test_guardrails_restructure.py PASSED")
+        print("[OK] test_guardrails_restructure.py PASSED")
     except AssertionError as e:
-        print(f"❌ FAIL: {e}")
+        print(f"[ERR] FAIL: {e}")
         import traceback
         traceback.print_exc()
 

@@ -433,7 +433,7 @@ def simulate_npl_price(
         max_pb = float(getattr(CONFIG, "max_price_to_book_if_derived", 1.10))
         precio_neto = float(min(precio_neto, book_value * max_pb))
 
-    # ✅ PnL contable (bank-ready): vs book_value (ya incluye costes tx)
+    # [OK] PnL contable (bank-ready): vs book_value (ya incluye costes tx)
     pnl_book = float(precio_neto - book_value)
     # métrica de referencia económica (legacy/auditoría)
     pnl_vs_recovery = float(precio_neto - base_recovery)
@@ -452,7 +452,7 @@ def simulate_npl_price(
     price_ratio_book = float(precio_neto / book_value) if book_value > 0 else 0.0
 
     # ---------------------------------------------
-    # ✅ Fire-sale (Book-aware) + override robusto + triggers auditables
+    # [OK] Fire-sale (Book-aware) + override robusto + triggers auditables
     # ---------------------------------------------
     override_thr = kwargs.get("fire_sale_price_ratio_book", None)
     if override_thr is not None and (not _is_na(override_thr)):
@@ -500,7 +500,7 @@ def simulate_npl_price(
         "precio_bruto": float(precio_bruto),
         "resumen": metrics,
 
-        # ✅ PnL contable (bank-ready) vs Book
+        # [OK] PnL contable (bank-ready) vs Book
         "pnl": float(pnl_book),          # alias principal (pipeline)
         "pnl_book": float(pnl_book),     # alias explícito (audit/legacy)
         "pnl_vs_recovery": float(pnl_vs_recovery),

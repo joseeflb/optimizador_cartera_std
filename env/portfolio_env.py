@@ -8,37 +8,37 @@ Entorno RL MACRO para optimización de CARTERAS NPL (Non-Performing Loans)
 Compatible con LoanEnv v6.3, simulate_npl_price y Basilea III STD.
 
 Hardening v3.6.1 (correcciones relevantes):
-  - ✅ Evita “stale aliases” import-time: bank_profile / bank_strategy / reward_cfg se refrescan en reset().
-  - ✅ Micro re-ranking compatible con PolicyAdapter (micro ya normaliza):
+  - [OK] Evita “stale aliases” import-time: bank_profile / bank_strategy / reward_cfg se refrescan en reset().
+  - [OK] Micro re-ranking compatible con PolicyAdapter (micro ya normaliza):
       * Si ppo_micro expone atributos tipo adapter (model/vecnorm), NO re-normalizamos aquí.
       * Si ppo_micro es PPO “crudo”, soporta VN local (ruta o defaults) + validación shape (10,).
-  - ✅ Gymnasium termination semantics:
+  - [OK] Gymnasium termination semantics:
       * terminated = cartera vacía
       * truncated = time-limit (max_steps) (solo si NOT terminated)
-  - ✅ Maintain coherente con cured:
-      * si cured=True → DPD se mantiene en 0 (no vuelve a delinquir por “time tick”)
-  - ✅ Guardrails fire-sale calibrados y coherentes:
+  - [OK] Maintain coherente con cured:
+      * si cured=True -> DPD se mantiene en 0 (no vuelve a delinquir por “time tick”)
+  - [OK] Guardrails fire-sale calibrados y coherentes:
       * Se evalúa contra BOOK VALUE (price/book) + pérdida contable, no solo price/EAD
       * Bloqueo prudente/balanceado salvo desinversión (o allow_fire_sale=True)
       * Umbral de pérdida en % de book (no € fijo): max_loss_eur = -max_loss_pct * book_value
       * Thresholds realistas por defecto (no 0.90/0.85), evitando “fire-sale siempre”
-  - ✅ Reestructura económicamente seria dentro del macro env:
+  - [OK] Reestructura económicamente seria dentro del macro env:
       * Coste de quita incluye write-off (quita * book_value) + (opcional) bps operativos + admin abs
       * book_value se actualiza tras quita (consistencia para futuras ventas)
-  - ✅ Macro steering sin repetir el mismo loan indefinidamente:
+  - [OK] Macro steering sin repetir el mismo loan indefinidamente:
       * Cooldown de “recently_touched” por loan_id (configurable)
       * _select_topk evita loans tocados recientemente y hace fallback si se queda sin candidatos
-  - ✅ Logging step-by-step:
+  - [OK] Logging step-by-step:
       * Log de candidatos top-N y picks, con key y valores
       * Handler a consola + fichero logs/portfolio_env.log (sin depender de basicConfig)
-  - ✅ EL/NI coherentes con generador y LoanEnv:
+  - [OK] EL/NI coherentes con generador y LoanEnv:
       * PD se interpreta como forward a horizonte
       * Para NI/EVA: EL_annual = (PD*LGD*EAD)/horizon_years
       * risk_proxy (estabilidad) usa EL lifetime (PD*LGD*EAD)
-  - ✅ segmento_id alineado con pipeline (CORPORATE=1..OTHER=9), no enum-index 0..N
-  - ✅ n_actions mínimo 12 (para el mapa 0..11 utilizado por policy_inference_portfolio)
-  - ✅ Pesos/costes por postura: prioriza BankStrategy (fallback a CFG.reward)
-  - ✅ Capital carry cost: usa cost_of_capital (no hurdle) y dt por step
+  - [OK] segmento_id alineado con pipeline (CORPORATE=1..OTHER=9), no enum-index 0..N
+  - [OK] n_actions mínimo 12 (para el mapa 0..11 utilizado por policy_inference_portfolio)
+  - [OK] Pesos/costes por postura: prioriza BankStrategy (fallback a CFG.reward)
+  - [OK] Capital carry cost: usa cost_of_capital (no hurdle) y dt por step
 """
 
 from __future__ import annotations
@@ -226,7 +226,7 @@ class PortfolioEnv(gym.Env):
 
         self.top_k_base = int(top_k)
 
-        # ✅ anti-repetición macro
+        # [OK] anti-repetición macro
         self._touched_last_step: Dict[str, int] = {}
         self._touched_last_action: Dict[str, int] = {}
 
@@ -258,7 +258,7 @@ class PortfolioEnv(gym.Env):
             self._load_from_dicts(self._generate_synthetic_portfolio(n=200))
 
     # -----------------------------------------------------------------
-    # ✅ Postura-aware params: prioriza BankStrategy (fallback reward_cfg)
+    # [OK] Postura-aware params: prioriza BankStrategy (fallback reward_cfg)
     # -----------------------------------------------------------------
     def _p(self, key: str, default: float) -> float:
         """
@@ -316,7 +316,7 @@ class PortfolioEnv(gym.Env):
         self.env_cfg = CFG.env
         self.reg_cfg = CFG.regulacion
 
-        # ✅ horizonte coherente con generador/LoanEnv
+        # [OK] horizonte coherente con generador/LoanEnv
         horizon_months = float(getattr(self.sens_cfg, "horizon_months", 24.0))
         self.horizon_years = float(max(1.0, horizon_months / 12.0))
 
@@ -367,17 +367,17 @@ class PortfolioEnv(gym.Env):
             else _cfg_get(self.env_cfg, "micro_vecnormalize_path", None)
         )
 
-        # ✅ capital carry config
+        # [OK] capital carry config
         self.cost_of_capital = float(getattr(self.reg_cfg, "cost_of_capital", 0.12))
         self.dt_years = float(_cfg_get(self.env_cfg, "dt_years_portfolio", 1.0 / 12.0))
 
-        # ✅ anti-repetición + logging granular
+        # [OK] anti-repetición + logging granular
         self.touched_cooldown_steps = int(_cfg_get(self.env_cfg, "macro_touched_cooldown_steps", 1))
         self.log_step_details = bool(_cfg_get(self.env_cfg, "portfolio_log_step_details", True))
         self.log_top_n = int(_cfg_get(self.env_cfg, "portfolio_log_top_n", 8))
 
     # -----------------------------------------------------------------
-    # ✅ Anti-repetición macro (recently_touched)
+    # [OK] Anti-repetición macro (recently_touched)
     # -----------------------------------------------------------------
     def _recently_touched_id(self, loan_id: str, cooldown_steps: Optional[int] = None) -> bool:
         cd = int(self.touched_cooldown_steps if cooldown_steps is None else cooldown_steps)
@@ -777,7 +777,7 @@ class PortfolioEnv(gym.Env):
 
         rwa = float(ead * rw)
 
-        # ✅ EL lifetime + annualization para NI (consistente con LoanEnv/generador)
+        # [OK] EL lifetime + annualization para NI (consistente con LoanEnv/generador)
         el_life = float(pdv * lgd * ead)
         el_ann = float(el_life / self.horizon_years)
         ni = float(ead * rate - el_ann - ead * COST_FUND)
@@ -834,7 +834,7 @@ class PortfolioEnv(gym.Env):
         return st
 
     # =====================================================================
-    #      🔹 OBS MICRO (LoanEnv) + PREDICCIÓN PPO MICRO + RANKING
+    #      [U1F539] OBS MICRO (LoanEnv) + PREDICCIÓN PPO MICRO + RANKING
     # =====================================================================
     def _build_raw_micro_obs(self, row: Dict[str, Any]) -> np.ndarray:
         """
@@ -884,7 +884,7 @@ class PortfolioEnv(gym.Env):
         try:
             raw_obs = self._build_raw_micro_obs(row)
 
-            # ✅ si es adapter, él decide cómo normalizar (no tocar)
+            # [OK] si es adapter, él decide cómo normalizar (no tocar)
             if self._micro_is_adapter():
                 a_pred, _ = self.ppo_micro.predict(raw_obs, deterministic=self.micro_deterministic)
                 return int(np.squeeze(a_pred))
@@ -957,7 +957,7 @@ class PortfolioEnv(gym.Env):
         if not filtered:
             return []
 
-        # ✅ evita loans tocados recientemente (macro steering)
+        # [OK] evita loans tocados recientemente (macro steering)
         if avoid_recently_touched:
             cd = self.touched_cooldown_steps if cooldown_steps is None else int(cooldown_steps)
             fresh = []
@@ -999,7 +999,7 @@ class PortfolioEnv(gym.Env):
         pd1 = float(np.clip(pd0 * drift_pd * macro, 0.05, 1.00))
         lgd1 = float(np.clip(lgd0 * drift_lgd * macro, 0.20, 0.95))
 
-        # ✅ cured no “vuelve” a delinquir por step tick
+        # [OK] cured no “vuelve” a delinquir por step tick
         dpd0 = float(loan.get("DPD", 0.0))
         dpd1 = 0.0 if cured0 else float(max(dpd0, 120.0) + 30.0)
 
@@ -1010,7 +1010,7 @@ class PortfolioEnv(gym.Env):
 
         rwa1 = float(ead0 * rw0)
 
-        # ✅ EL lifetime + annualization para NI
+        # [OK] EL lifetime + annualization para NI
         el_life = float(pd1 * lgd1 * ead0)
         el_ann = float(el_life / self.horizon_years)
         ni1 = float(ead0 * rate0 - el_ann - ead0 * COST_FUND)
@@ -1061,7 +1061,7 @@ class PortfolioEnv(gym.Env):
         pd_min = float(self.restruct_cfg.pd_min)
         pd_max = float(self.restruct_cfg.pd_max)
 
-        # ✅ costes postura-aware (fallback reward_cfg)
+        # [OK] costes postura-aware (fallback reward_cfg)
         admin_cost_abs = self._p("restructure_admin_cost_abs", float(getattr(self.reward_cfg, "restructure_admin_cost_abs", 0.0)))
         # bps operativos (opcional, pequeño). El write-off es el coste fuerte.
         quita_bps = self._p("restructure_operational_quita_bps", float(getattr(self.reward_cfg, "restructure_cost_quita_bps", 0.0)))
@@ -1095,12 +1095,12 @@ class PortfolioEnv(gym.Env):
 
                     rwa_c = float(ead_c * float(loan["RW"]))
 
-                    # ✅ EL lifetime + annualization para NI
+                    # [OK] EL lifetime + annualization para NI
                     el_life_c = float(pd_c * lgd_c * ead_c)
                     el_ann_c = float(el_life_c / self.horizon_years)
                     ni_c = float(ead_c * tasa - el_ann_c - ead_c * COST_FUND)
 
-                    # ✅ coste serio: write-off de principal perdonado (sobre book)
+                    # [OK] coste serio: write-off de principal perdonado (sobre book)
                     writeoff_cost = float(quita) * float(book_value0)
                     # coste operativo bps (pequeño; opcional)
                     op_cost = (float(quita_bps) / 10_000.0) * float(quita) * float(ead0)
@@ -1242,7 +1242,7 @@ class PortfolioEnv(gym.Env):
 
         max_loss_pct, min_px_book = self._fire_sale_limits()
 
-        # ✅ book/coverage robustos
+        # [OK] book/coverage robustos
         cov = _safe_float(loan.get("coverage_rate", 0.0), 0.0)
         if cov > 1.0:
             cov = cov / 100.0
@@ -1261,7 +1261,7 @@ class PortfolioEnv(gym.Env):
             rating=str(loan.get("rating", "BBB")).upper(),
             book_value=book_value,
             coverage_rate=cov,
-            # ✅ alinear fire-sale threshold del simulador con el guardrail macro
+            # [OK] alinear fire-sale threshold del simulador con el guardrail macro
             fire_sale_price_ratio_book=float(min_px_book),
         )
 
@@ -1293,7 +1293,7 @@ class PortfolioEnv(gym.Env):
         if np.isfinite(px_book_ratio):
             px_book = float(px_book_ratio)
 
-        # ✅ registrar SIEMPRE fire-sale (se venda o se bloquee)
+        # [OK] registrar SIEMPRE fire-sale (se venda o se bloquee)
         loan["Fire_Sale"] = bool(is_fire_sale)
         loan["sell_min_px_book"] = float(min_px_book)
         loan["sell_max_loss_pct_book"] = float(max_loss_pct)
@@ -1471,10 +1471,10 @@ class PortfolioEnv(gym.Env):
     #                             RESET
     # =====================================================================
     def reset(self, *, seed: Optional[int] = None, options: Optional[dict] = None):
-        # ✅ refrescar config/bank profile por si policy_inference ha hecho set_bank_profile sin reload
+        # [OK] refrescar config/bank profile por si policy_inference ha hecho set_bank_profile sin reload
         self._refresh_cfg_aliases()
 
-        # ✅ limpiar “recently touched”
+        # [OK] limpiar “recently touched”
         self._touched_last_step.clear()
         self._touched_last_action.clear()
 
@@ -1937,11 +1937,11 @@ class PortfolioEnv(gym.Env):
         hhi_seg, hhi_rat = self._concentration_metrics(loans_after)
         eva_vol = self._eva_volatility()
 
-        # ✅ capital carry (no hurdle): cap_blocked * cost_of_capital * dt
+        # [OK] capital carry (no hurdle): cap_blocked * cost_of_capital * dt
         cap_blocked = rwa1 * self.cap_ratio
         capital_carry_cost = cap_blocked * float(self.cost_of_capital) * float(self.dt_years)
 
-        # ✅ pesos/bonos por postura (fallback reward_cfg)
+        # [OK] pesos/bonos por postura (fallback reward_cfg)
         w_pnl = self._p("w_pnl", float(getattr(self.reward_cfg, "w_pnl", 0.0)))
         w_eva = self._p("w_eva", float(getattr(self.reward_cfg, "w_eva", 1.0)))
         w_cap = self._p("w_capital", float(getattr(self.reward_cfg, "w_capital", 0.0)))
@@ -1983,7 +1983,7 @@ class PortfolioEnv(gym.Env):
 
         r = float(np.clip(r, clip_low, clip_high))
 
-        # ✅ Gymnasium semantics
+        # [OK] Gymnasium semantics
         terminated = (len(active_idxs_after) == 0)
         truncated = (not terminated) and (self.steps >= self.max_steps)
 
