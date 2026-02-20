@@ -53,10 +53,14 @@ def get_git_info() -> Dict[str, str]:
             commit = "unknown"
             
         try:
-            status = subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT_DIR).decode().strip()
+            # Ignore untracked files: only tracked modifications/deletions count
+            # as "dirty" for audit purposes (generated output files are expected untracked)
+            status = subprocess.check_output(
+                ["git", "status", "--porcelain", "--untracked-files=no"], cwd=ROOT_DIR
+            ).decode().strip()
         except:
             status = "unknown"
-            
+
         return {"commit": commit, "status": "clean" if not status else "dirty"}
     except Exception as e:
         logger.warning(f"Could not retrieve git info: {e}")
