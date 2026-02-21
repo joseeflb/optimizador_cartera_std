@@ -41,7 +41,7 @@ REM ============================================================
 REM 2. SMOKE TEST
 REM ============================================================
 echo [%time%] 2. Smoke test...
-call .\smoke_test_venv.bat >> %LOGFILE% 2>&1
+call .\smoke_test.bat >> %LOGFILE% 2>&1
 if %errorlevel% neq 0 (echo [ERROR] Smoke test fallido. See %LOGFILE% & exit /b 1)
 echo [OK] Smoke test >> %LOGFILE%
 
@@ -49,7 +49,7 @@ REM ============================================================
 REM 3. INFERENCIA 3 POSTURAS
 REM ============================================================
 echo [%time%] 3. Inferencia 3 posturas (TAG: %TAG%)...
-call .\run_3_postures_executability_venv.bat --tag %TAG% >> %LOGFILE% 2>&1
+call .\run_3_postures_executability.bat --tag %TAG% >> %LOGFILE% 2>&1
 if %errorlevel% neq 0 (echo [ERROR] Postures inference fallido. See %LOGFILE% & exit /b 1)
 echo [OK] Inferencia 3 posturas >> %LOGFILE%
 
