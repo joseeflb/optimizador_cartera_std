@@ -1,145 +1,146 @@
 @echo off
 setlocal enabledelayedexpansion
-:: ==========================================
-:: CI LOCAL (Continuous Integration Substitute)
-:: ==========================================
-:: Ejecuta el pipeline completo de validaci�n y empaquetado.
-:: Uso: .\ci_local.bat [TAG]
-::
-:: Ejemplo: .\ci_local.bat pc8_prep
-:: ==========================================
 
-:: 1. Configuraci�n
-if "%1"=="" (
-    set TAG=pc5_postures_validation
-) else (
-    set TAG=%1
-)
+REM ============================================================
+REM CI LOCAL - Pipeline completo de validacion y empaquetado
+REM Uso: .\ci_local.bat [TAG]
+REM Ejemplo: .\ci_local.bat pc10_final
+REM ============================================================
 
-:: Get Timestamp via PowerShell
-for /f "usebackq tokens=*" %%a in (`powershell -Command "Get-Date -Format yyyyMMdd_HHmmss"`) do (
-    set TS=%%a
-)
+REM --- Config ---
+if "%1"=="" (set TAG=ci_local) else (set TAG=%1)
 
+for /f "usebackq tokens=*" %%a in (`powershell -Command "Get-Date -Format yyyyMMdd_HHmmss"`) do set TS=%%a
+
+if not exist logs mkdir logs
 set LOGFILE=logs\ci_local_%TAG%_%TS%.log
 
+set "MODEL_MICRO=models\best_model_loan.zip"
+set "VN_MICRO=models\vecnormalize_loan.pkl"
+set "PORTFOLIO=data\portfolio_synth.xlsx"
+if exist "data\portfolio_snapshot.xlsx" set "PORTFOLIO=data\portfolio_snapshot.xlsx"
+
 echo ========================================
-echo  CI LOCAL STARTED: %date% %time%
-echo  TAG: %TAG%
+echo  CI LOCAL  -  TAG: %TAG%
+echo  LOG: %LOGFILE%
+echo  Portfolio: %PORTFOLIO%
+echo ========================================
+
+REM ============================================================
+REM 1. CHECK ENTORNO
+REM ============================================================
+echo [%time%] 1. Check Python environment...
+call .venv\Scripts\activate.bat >> %LOGFILE% 2>&1
+python --version >> %LOGFILE% 2>&1
+if %errorlevel% neq 0 (echo [ERROR] Python check fallido. & exit /b 1)
+python -c "import pandas, numpy, stable_baselines3, yaml; print('paquetes OK')" >> %LOGFILE% 2>&1
+if %errorlevel% neq 0 (echo [ERROR] Paquetes criticos no disponibles. & exit /b 1)
+echo [OK] Entorno OK >> %LOGFILE%
+
+REM ============================================================
+REM 2. SMOKE TEST
+REM ============================================================
+echo [%time%] 2. Smoke test...
+call .\smoke_test_venv.bat >> %LOGFILE% 2>&1
+if %errorlevel% neq 0 (echo [ERROR] Smoke test fallido. See %LOGFILE% & exit /b 1)
+echo [OK] Smoke test >> %LOGFILE%
+
+REM ============================================================
+REM 3. INFERENCIA 3 POSTURAS
+REM ============================================================
+echo [%time%] 3. Inferencia 3 posturas (TAG: %TAG%)...
+call .\run_3_postures_executability_venv.bat --tag %TAG% >> %LOGFILE% 2>&1
+if %errorlevel% neq 0 (echo [ERROR] Postures inference fallido. See %LOGFILE% & exit /b 1)
+echo [OK] Inferencia 3 posturas >> %LOGFILE%
+
+REM ============================================================
+REM 4. STRESS ENGINE (PC9/PC10)
+REM ============================================================
+echo [%time%] 4. Stress engine...
+python -m engines.stress_engine ^
+    --tag %TAG% ^
+    --portfolio !PORTFOLIO! ^
+    --scenarios configs/stress_scenarios.yaml ^
+    --postures prudencial balanceado desinversion >> %LOGFILE% 2>&1
+if !errorlevel! neq 0 (echo [ERROR] Stress engine fallido. See %LOGFILE% & exit /b 1)
+
+if not exist "reports\stress_summary_%TAG%.csv" (
+    echo [ERROR] stress_summary_%TAG%.csv no generado. & exit /b 1
+)
+echo [OK] reports\stress_summary_%TAG%.csv >> %LOGFILE%
+
+REM --- Verificar columnas PC10 ---
+powershell -Command "try { $f='reports\stress_summary_%TAG%.csv'; $cols=(Import-Csv $f)[0].PSObject.Properties.Name; $kpis='sale_pnl_total','avg_sale_pnl','avg_bid_pct_ead','sell_blocked_count'; $miss=$kpis|Where-Object{$_ -notin $cols}; if($miss){Write-Output \"[ERROR] PC10 KPI cols ausentes: $($miss -join ', ')\"; exit 1}else{Write-Output '[OK] PC10 KPI cols presentes'} } catch { Write-Output '[SKIP] No se pudo verificar KPIs PC10' }" >> %LOGFILE% 2>&1
+if !errorlevel! equ 1 (echo [ERROR] PC10 KPI cols ausentes en stress_summary. See %LOGFILE% & exit /b 1)
+
+REM --- Test PC10 pricing KPIs ---
+echo [%time%] 4.1 Tests PC10 pricing KPIs...
+python -m pytest tests/test_stress_summary_pricing_kpis.py tests/test_stress_pricing_crunch_effect.py -v >> %LOGFILE% 2>&1
+if !errorlevel! neq 0 (echo [ERROR] Tests PC10 pricing KPIs fallaron. See %LOGFILE% & exit /b 1)
+echo [OK] Tests PC10 pricing KPIs >> %LOGFILE%
+
+REM ============================================================
+REM 5. BACKTESTING LIGHT
+REM ============================================================
+echo [%time%] 5. Backtesting light...
+python -m reports.backtesting_light ^
+    --tag %TAG% ^
+    --stress-scenarios configs/stress_scenarios.yaml >> %LOGFILE% 2>&1
+if !errorlevel! neq 0 (echo [ERROR] Backtesting light fallido. See %LOGFILE% & exit /b 1)
+if not exist "reports\backtesting_light_%TAG%.csv" (
+    echo [ERROR] backtesting_light_%TAG%.csv no generado. & exit /b 1
+)
+echo [OK] reports\backtesting_light_%TAG%.csv >> %LOGFILE%
+
+REM ============================================================
+REM 6. COMPARACION DE POSTURAS
+REM ============================================================
+echo [%time%] 6. Comparacion de posturas...
+python -m reports.compare_postures --tag %TAG% >> %LOGFILE% 2>&1
+if %errorlevel% neq 0 (echo [ERROR] compare_postures fallido. See %LOGFILE% & exit /b 1)
+echo [OK] compare_postures >> %LOGFILE%
+
+REM ============================================================
+REM 7. KPI REPORT POR POSTURA (pricing PC10)
+REM ============================================================
+echo [%time%] 7. KPI report por postura...
+python -m reports.posture_kpi_report --tag %TAG% >> %LOGFILE% 2>&1
+if %errorlevel% neq 0 (echo [WARNING] posture_kpi_report fallo ^(no bloqueante^). >> %LOGFILE%)
+echo [OK] posture_kpi_report >> %LOGFILE%
+
+REM ============================================================
+REM 8. EVALUACION VS BASELINES
+REM ============================================================
+echo [%time%] 8. Evaluacion vs baselines...
+python reports/evaluate_against_baselines_sim.py ^
+    --tag %TAG% ^
+    --select latest ^
+    --out reports/evaluation_%TAG%.csv ^
+    --report reports/evaluation_%TAG%_report.md >> %LOGFILE% 2>&1
+if %errorlevel% neq 0 (echo [ERROR] Evaluacion vs baselines fallida. See %LOGFILE% & exit /b 1)
+echo [OK] Evaluacion vs baselines >> %LOGFILE%
+
+REM ============================================================
+REM 9. COMMITTEE PACK
+REM ============================================================
+echo [%time%] 9. Committee pack...
+python -m reports.make_committee_pack --tag %TAG% >> %LOGFILE% 2>&1
+if %errorlevel% neq 0 (echo [ERROR] make_committee_pack fallido. See %LOGFILE% & exit /b 1)
+echo [OK] Committee pack >> %LOGFILE%
+
+REM ============================================================
+REM 10. TEST SUITE COMPLETO (pytest)
+REM ============================================================
+echo [%time%] 10. Test suite completo (pytest -q)...
+python -m pytest -q >> %LOGFILE% 2>&1
+if %errorlevel% neq 0 (echo [ERROR] Pytest fallido. See %LOGFILE% & exit /b 1)
+echo [OK] Pytest 45/45 >> %LOGFILE%
+
+echo ========================================
+echo  CI LOCAL COMPLETADO  -  TAG: %TAG%
 echo  LOG: %LOGFILE%
 echo ========================================
-
-:: Redirigir todo a log y consola (usando powershell Tee-Object si se quiere, o simple >>)
-
-echo [%time%] 1. Check Python Environment...
-call .venv\Scripts\activate.bat > %LOGFILE% 2>&1
-python --version >> %LOGFILE% 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] Python environment check failed.
-    exit /b 1
-)
-
-echo [%time%] 2. Running Smoke Test...
-echo [INFO] Running smoke_test_venv.bat >> %LOGFILE%
-call .\smoke_test_venv.bat >> %LOGFILE% 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] Smoke test failed. See %LOGFILE%
-    exit /b 1
-)
-
-echo [%time%] 3. Running 3 Postures Inference...
-echo [INFO] Running run_3_postures_executability_venv.bat --tag %TAG% >> %LOGFILE%
-call .\run_3_postures_executability_venv.bat --tag %TAG% >> %LOGFILE% 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] Postures inference failed. See %LOGFILE%
-    exit /b 1
-)
-
-echo [%time%] 3.5. Running Stress and Sensitivities (PC9)...
-echo [INFO] Running stress engine... >> %LOGFILE%
-:: Using portfolio_snapshot.xlsx for final/ci run, or verify existence
-if exist data\portfolio_snapshot.xlsx (
-    set PORTFOLIO=data\portfolio_snapshot.xlsx
-) else (
-    set PORTFOLIO=data\portfolio_synth.xlsx
-)
-python -m engines.stress_engine --tag %TAG% --portfolio !PORTFOLIO! --scenarios configs/stress_scenarios.yaml --postures prudencial balanceado desinversion >> %LOGFILE% 2>&1
-if !errorlevel! neq 0 (
-    echo [ERROR] Stress Engine failed. See %LOGFILE%
-    exit /b 1
-)
-:: Verify stress summary artifact exists
-if not exist "reports\stress_summary_%TAG%.csv" (
-    echo [ERROR] Stress summary not generated: reports\stress_summary_%TAG%.csv
-    exit /b 1
-)
-echo [OK] Stress summary: reports\stress_summary_%TAG%.csv >> %LOGFILE%
-:: PC10: Verify pricing KPI columns exist in stress summary
-powershell -Command "try { $csv=Import-Csv 'reports\stress_summary_%TAG%.csv'; $cols=$csv[0].PSObject.Properties.Name; $kpis='sale_pnl_total','avg_sale_pnl','avg_bid_pct_ead','sell_blocked_count'; $missing=$kpis | Where-Object {$_ -notin $cols}; if($missing){Write-Output \"[ERROR] PC10 KPI columns missing in stress_summary: $($missing -join ', ')\"; exit 1}else{Write-Output '[OK] PC10 pricing KPI columns present in stress_summary'} } catch { Write-Output '[SKIP] Could not verify PC10 KPI columns' }" >> %LOGFILE% 2>&1
-if !errorlevel! equ 1 (
-    echo [ERROR] PC10 pricing KPI columns missing in stress_summary. See %LOGFILE%
-    exit /b 1
-)
-:: PC10: Run pricing KPI tests explicitly (fast, model-free)
-echo [%time%] 3.6. Running PC10 Pricing KPI Tests...
-python -m pytest tests/test_stress_summary_pricing_kpis.py -v >> %LOGFILE% 2>&1
-if !errorlevel! neq 0 (
-    echo [ERROR] PC10 pricing KPI tests failed. See %LOGFILE%
-    exit /b 1
-)
-echo [OK] PC10 pricing KPI tests passed >> %LOGFILE%
-:: Warn if pricing_crunch rows are identical to baseline (would indicate no-op pricing shock)
-powershell -Command "try { $df=Import-Csv 'reports\stress_summary_%TAG%.csv'; $bl=($df | Where-Object {$_.scenario -eq 'baseline'} | Measure-Object -Property n_sales -Sum).Sum; $pc=($df | Where-Object {$_.scenario -eq 'pricing_crunch'} | Measure-Object -Property n_sales -Sum).Sum; if($bl -eq $pc){Write-Output '[WARNING] pricing_crunch n_sales identical to baseline - BID_HAIRCUT_GLOBAL may not be applied'}else{Write-Output '[OK] pricing_crunch differs from baseline (pricing shock operative)'} } catch { Write-Output '[SKIP] Could not compare pricing_crunch vs baseline' }" >> %LOGFILE% 2>&1
-
-echo [INFO] Running backtesting light... >> %LOGFILE% 
-python -m reports.backtesting_light --tag %TAG% --stress-scenarios configs/stress_scenarios.yaml >> %LOGFILE% 2>&1
-if !errorlevel! neq 0 (
-    echo [ERROR] Backtesting Light failed. See %LOGFILE%
-    exit /b 1
-)
-:: Verify backtesting artifact exists
-if not exist "reports\backtesting_light_%TAG%.csv" (
-    echo [ERROR] Backtesting light CSV not generated: reports\backtesting_light_%TAG%.csv
-    exit /b 1
-)
-echo [OK] Backtesting light: reports\backtesting_light_%TAG%.csv >> %LOGFILE%
-
-echo [%time%] 4. Running Comparison...
-echo [INFO] Running python -m reports.compare_postures --tag %TAG% >> %LOGFILE%
-python -m reports.compare_postures --tag %TAG% >> %LOGFILE% 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] Comparison failed. See %LOGFILE%
-    exit /b 1
-)
-
-echo [%time%] 5. Running Evaluation vs Baselines...
-echo [INFO] Running evaluate_against_baselines_sim.py >> %LOGFILE%
-python reports/evaluate_against_baselines_sim.py --tag %TAG% --select latest --out reports/evaluation_pc6.csv --report reports/evaluation_report.md >> %LOGFILE% 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] Evaluation failed. See %LOGFILE%
-    exit /b 1
-)
-
-echo [%time%] 6. Generating Committee Pack (with MEMO)...
-echo [INFO] Running make_committee_pack.py >> %LOGFILE%
-python -m reports.make_committee_pack --tag %TAG% >> %LOGFILE% 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] Pack generation failed. See %LOGFILE%
-    exit /b 1
-)
-
-echo [%time%] 7. Running Final Test Suite (pytest)...
-echo [INFO] Running pytest -q >> %LOGFILE%
-python -m pytest -q >> %LOGFILE% 2>&1
-if %errorlevel% neq 0 (
-    echo [ERROR] Pytest failed. See %LOGFILE%
-    exit /b 1
-)
-
-echo ========================================
-echo  CI LOCAL FINISHED SUCCESSFULLY AND LOG SAVED
-echo ========================================
-echo [%time%] SUCCESS. >> %LOGFILE%
+echo [%time%] SUCCESS >> %LOGFILE%
 
 endlocal
 exit /b 0

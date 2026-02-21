@@ -1,72 +1,117 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-REM ============================
-REM ROOT DEL PROYECTO
-REM ============================
+REM ============================================================
+REM INFERENCIA SOLO (sin entrenamiento)
+REM Asume modelos ya entrenados en models\
+REM Uso: run_inference_only.bat [--tag TAG]
+REM ============================================================
+
 set "ROOT_DIR=%~dp0"
 cd /d "%ROOT_DIR%"
+set "TAG=infer1"
 
-REM Intentar activar entorno virtual si existe
-if exist "%ROOT_DIR%\.venv\Scripts\activate.bat" (
-    call "%ROOT_DIR%\.venv\Scripts\activate.bat"
-)
+:parse_args
+if "%~1"=="" goto end_parse
+if "%~1"=="--tag" (set "TAG=%~2" & shift & shift & goto parse_args)
+shift
+goto parse_args
+:end_parse
 
+if exist "%ROOT_DIR%.venv\Scripts\activate.bat" call "%ROOT_DIR%.venv\Scripts\activate.bat"
 
-REM ============================
-REM PYTHON
-REM ============================
 set "PY_EXE=python"
-set "PY_ARGS="
+%PY_EXE% --version >nul 2>&1
+if errorlevel 1 (echo [ERROR] Python no encontrado. & pause & exit /b 1)
+python -c "import sys; print('PYTHON:', sys.executable)"
 
-%PY_EXE% %PY_ARGS% --version >nul 2>&1
-if errorlevel 1 (
-  echo ERROR: No se encuentra Python.
-  pause
-  exit /b 1
+set "PYTHONPATH=%ROOT_DIR%"
+set "MODEL_MICRO=models\best_model_loan.zip"
+set "VN_MICRO=models\vecnormalize_loan.pkl"
+
+set "PORTFOLIO=data\portfolio_synth.xlsx"
+if exist "data\portfolio_snapshot.xlsx" set "PORTFOLIO=data\portfolio_snapshot.xlsx"
+
+if not exist "%MODEL_MICRO%" (
+    echo [ERROR] Modelo no encontrado: %MODEL_MICRO%
+    echo Ejecuta run_pipeline.bat primero para entrenar.
+    pause & exit /b 1
+)
+if not exist "%PORTFOLIO%" (
+    echo [ERROR] Portfolio no encontrado: %PORTFOLIO%
+    pause & exit /b 1
 )
 
-python -c "import sys; print('USANDO PYTHON:', sys.executable)"
+echo =================================================================
+echo  INFERENCIA SOLO  -  TAG: %TAG%
+echo  Modelo    : %MODEL_MICRO%
+echo  Portfolio : %PORTFOLIO%
+echo =================================================================
 
-echo ===============================================
-echo EJECUCION SOLO INFERENCIA (MICRO + MACRO)
-echo ===============================================
-echo ROOT: %ROOT_DIR%
-echo PY:   %PY_EXE%
+REM ============================================================
+REM 1. INFERENCIA COORDINADA - 3 POSTURAS
+REM ============================================================
+echo.
+echo [1/5] Inferencia coordinada - 3 posturas...
 
-REM Comprobar si existen modelos antes de correr
-if not exist "models\best_model.zip" (
-  echo ERROR: No existe models\best_model.zip.
-  echo Ejecuta run_pipeline.bat primero para entrenar.
-  pause
-  exit /b 1
+for %%P in (prudencial balanceado desinversion) do (
+    echo.
+    echo    [%%P]
+    %PY_EXE% -m agent.coordinator_inference ^
+        --model-micro %MODEL_MICRO% ^
+        --portfolio %PORTFOLIO% ^
+        --risk-posture %%P ^
+        --vn-micro %VN_MICRO% ^
+        --n-steps 5 ^
+        --top-k 5 ^
+        --tag %TAG%
+    if errorlevel 1 (echo [ERROR] Inferencia %%P fallida. & exit /b 1)
 )
 
+REM ============================================================
+REM 2. STRESS ENGINE (BCE/EBA - PC9/PC10)
+REM ============================================================
 echo.
-echo OK: artefactos verificados.
-echo.
+echo [2/5] Stress engine (multi-escenario)...
+%PY_EXE% -m engines.stress_engine ^
+    --tag %TAG% ^
+    --portfolio %PORTFOLIO% ^
+    --scenarios configs/stress_scenarios.yaml ^
+    --postures prudencial balanceado desinversion
+if errorlevel 1 (echo [ERROR] Stress engine fallido. & exit /b 1)
+echo [OK] reports\stress_summary_%TAG%.csv
 
-REM --- Postura PRUDENCIAL ---
+REM ============================================================
+REM 3. BACKTESTING LIGHT
+REM ============================================================
 echo.
-echo [1/3] Inferencia PRUDENCIAL...
-%PY_EXE% -m agent.coordinator_inference --model-micro models\best_model.zip --portfolio data\portfolio_synth.xlsx --risk-posture prudencial --vn-micro models\vecnormalize_loan.pkl --n-steps 5 --top-k 5 --tag run1
-if errorlevel 1 exit /b 1
+echo [3/5] Backtesting light...
+%PY_EXE% -m reports.backtesting_light ^
+    --tag %TAG% ^
+    --stress-scenarios configs/stress_scenarios.yaml
+if errorlevel 1 (echo [WARNING] Backtesting light fallo (no bloqueante).)
 
-REM --- Postura BALANCEADO ---
+REM ============================================================
+REM 4. COMPARACION DE POSTURAS
+REM ============================================================
 echo.
-echo [2/3] Inferencia BALANCEADO...
-%PY_EXE% -m agent.coordinator_inference --model-micro models\best_model.zip --portfolio data\portfolio_synth.xlsx --risk-posture balanceado --vn-micro models\vecnormalize_loan.pkl --n-steps 5 --top-k 5 --tag run1
-if errorlevel 1 exit /b 1
+echo [4/5] Comparacion de posturas...
+%PY_EXE% -m reports.compare_postures --tag %TAG%
+if errorlevel 1 (echo [WARNING] compare_postures fallo (no bloqueante).)
 
-REM --- Postura DESINVERSION ---
+REM ============================================================
+REM 5. KPI REPORT + RESUMEN
+REM ============================================================
 echo.
-echo [3/3] Inferencia DESINVERSION...
-%PY_EXE% -m agent.coordinator_inference --model-micro models\best_model.zip --portfolio data\portfolio_synth.xlsx --risk-posture desinversion --vn-micro models\vecnormalize_loan.pkl --n-steps 5 --top-k 5 --tag run1
-if errorlevel 1 exit /b 1
-
+echo [5/5] KPI report y resumen final...
+%PY_EXE% -m reports.posture_kpi_report --tag %TAG%
+if errorlevel 1 (echo [WARNING] posture_kpi_report fallo (no bloqueante).)
+%PY_EXE% reports/results_summary.py
+if errorlevel 1 (echo [WARNING] results_summary.py fallo (no bloqueante).)
 
 echo.
-echo ===============================================
-echo FIN INFERENCIA.
-echo ===============================================
+echo =================================================================
+echo  INFERENCIA FINALIZADA  -  TAG: %TAG%
+echo  Resultados en: reports\
+echo =================================================================
 pause

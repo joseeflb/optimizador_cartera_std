@@ -1,53 +1,81 @@
 @echo off
-setlocal EnableExtensions
+setlocal EnableExtensions EnableDelayedExpansion
 
-REM ============================
-REM Test de Reproducibilidad
-REM ============================
+REM ============================================================
+REM TEST DE REPRODUCIBILIDAD - 3 POSTURAS
+REM Corre inferencia 2 veces con el mismo modelo y compara.
+REM Uso: run_repro_test.bat [--tag TAG]
+REM ============================================================
+
 set "ROOT_DIR=%~dp0"
 cd /d "%ROOT_DIR%"
 
-REM Intentar activar entorno virtual si existe
-if exist "%ROOT_DIR%\.venv\Scripts\activate.bat" (
-    call "%ROOT_DIR%\.venv\Scripts\activate.bat"
-)
+if exist "%ROOT_DIR%.venv\Scripts\activate.bat" call "%ROOT_DIR%.venv\Scripts\activate.bat"
 
 set "PY_EXE=python"
 set "PYTHONPATH=%ROOT_DIR%"
+set "MODEL_MICRO=models\best_model_loan.zip"
+set "VN_MICRO=models\vecnormalize_loan.pkl"
+set "PORTFOLIO=data\portfolio_synth.xlsx"
+if exist "data\portfolio_snapshot.xlsx" set "PORTFOLIO=data\portfolio_snapshot.xlsx"
 
-python -c "import sys; print('USANDO PYTHON:', sys.executable)"
+python -c "import sys; print('PYTHON:', sys.executable)"
 
-echo ===============================================
-echo TEST DE REPRODUCIBILIDAD - 3 POSTURAS
-echo ===============================================
+echo =================================================================
+echo  TEST REPRODUCIBILIDAD - Modelo: %MODEL_MICRO%
+echo =================================================================
+
+REM ============================================================
+REM RUN A
+REM ============================================================
 echo.
-
-REM ============================
-REM Parámetros idénticos a run original
-REM ============================
-REM NOTA: Usamos seeds fijas si el código lo permite, o confiamos en 
-REM la carga determinista de modelos. 
-
-echo [1/3] Run A (original) ...
-REM Simulamos generando un tag único
+echo [1/3] Run A (primera ejecucion)...
 set "TAG_A=repro_A"
-%PY_EXE% -m agent.coordinator_inference --model-micro models\best_model.zip --portfolio data\portfolio_synth.xlsx --risk-posture balanceado --vn-micro models\vecnormalize_loan.pkl --n-steps 3 --top-k 5 --tag %TAG_A%
-if errorlevel 1 exit /b 1
+for %%P in (prudencial balanceado desinversion) do (
+    %PY_EXE% -m agent.coordinator_inference ^
+        --model-micro %MODEL_MICRO% ^
+        --portfolio %PORTFOLIO% ^
+        --risk-posture %%P ^
+        --vn-micro %VN_MICRO% ^
+        --n-steps 3 ^
+        --top-k 5 ^
+        --tag %TAG_A%
+    if errorlevel 1 (echo [ERROR] Run A - postura %%P fallo. & exit /b 1)
+)
+echo [OK] Run A completado.
 
+REM ============================================================
+REM RUN B
+REM ============================================================
 echo.
-echo [2/3] Run B (repetición) ...
+echo [2/3] Run B (repeticion)...
 set "TAG_B=repro_B"
-%PY_EXE% -m agent.coordinator_inference --model-micro models\best_model.zip --portfolio data\portfolio_synth.xlsx --risk-posture balanceado --vn-micro models\vecnormalize_loan.pkl --n-steps 3 --top-k 5 --tag %TAG_B%
-if errorlevel 1 exit /b 1
+for %%P in (prudencial balanceado desinversion) do (
+    %PY_EXE% -m agent.coordinator_inference ^
+        --model-micro %MODEL_MICRO% ^
+        --portfolio %PORTFOLIO% ^
+        --risk-posture %%P ^
+        --vn-micro %VN_MICRO% ^
+        --n-steps 3 ^
+        --top-k 5 ^
+        --tag %TAG_B%
+    if errorlevel 1 (echo [ERROR] Run B - postura %%P fallo. & exit /b 1)
+)
+echo [OK] Run B completado.
+
+REM ============================================================
+REM COMPARACION
+REM ============================================================
+echo.
+echo [3/3] Comparando resultados A vs B...
+%PY_EXE% -m reports.compare_postures --tag %TAG_A%
+%PY_EXE% -m reports.compare_postures --tag %TAG_B%
 
 echo.
-echo [3/3] Comparación de resultados ...
-REM Aquí podríamos llamar a un script de diff, 
-REM por ahora visual: revisa si los logs/excels son idénticos.
-
-echo.
-echo ===============================================
-echo VERIFICAR CARPETAS reports/inference_*_%TAG_A%_* y ...%TAG_B%_*
-echo Deben ser idénticas en decisiones si el modelo es determinista.
-echo ===============================================
+echo =================================================================
+echo  REPRODUCIBILIDAD: verificar que los outputs de TAG_A y TAG_B
+echo  sean identicos en decisiones si el modelo es determinista.
+echo  - reports\decisiones_%TAG_A%_*.xlsx
+echo  - reports\decisiones_%TAG_B%_*.xlsx
+echo =================================================================
 pause
