@@ -239,10 +239,11 @@ def main():
             shutil.copy2(src_path, os.path.join(pack_dir, dest_name))
             manifest["artifacts"].append(dest_name)
 
-    # 9. Most recent ci_local log (for this tag or any pc9_final log)
+    # 9. Most recent ci_local log (for this tag, then any pc10_final, then any log)
     log_patterns = [
         os.path.join(ROOT_DIR, "logs", f"ci_local_{args.tag}_*.log"),
-        os.path.join(ROOT_DIR, "logs", "ci_local_pc9_final_*.log"),
+        os.path.join(ROOT_DIR, "logs", "ci_local_pc10_final_*.log"),
+        os.path.join(ROOT_DIR, "logs", "ci_local_*.log"),
     ]
     ci_log_src = None
     for pat in log_patterns:
