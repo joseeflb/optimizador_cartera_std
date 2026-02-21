@@ -268,22 +268,34 @@ def run_stress_pipeline(tag: str, portfolio_path: str, scenarios_yaml: str, post
                     )
 
                     # --- Pricing KPIs (PC10) ---
-                    # sale_pnl_total: realized P&L sum across sold loans
+                    # sale_pnl_total: realized P&L sum across sold loans (0 if no sales)
                     sale_pnl_total = _col_sum_filtered(
                         df_res, sell_mask, "pnl_realized", "pnl", "pnl_book"
                     )
-                    # avg_sale_pnl: mean P&L per sale (NaN if no sales → 0 for CSV)
+                    # avg_sale_pnl: mean P&L per sale (0 if no sales)
                     avg_sale_pnl_val = _col_mean_filtered(
                         df_res, sell_mask, "pnl_realized", "pnl", "pnl_book"
                     )
                     avg_sale_pnl = 0.0 if np.isnan(avg_sale_pnl_val) else avg_sale_pnl_val
 
-                    # avg_bid_pct_ead: mean price/book for sold loans (best available proxy)
+                    # avg_bid_pct_ead: mean bid price / EAD for sold loans.
+                    # Column priority: price_ratio_ead (canonical) > Price_to_EAD >
+                    #   price_ratio_book > audit_price_book_ratio > pnl_ratio_book.
+                    # NOTE: audit_price_book_ratio is often NaN in coordinator output;
+                    # price_ratio_ead is the canonical bid/EAD column (0–1 range).
+                    # Fallback is NaN (honest missing), never fake 0.
                     avg_bid_pct_ead_val = _col_mean_filtered(
                         df_res, sell_mask,
-                        "audit_price_book_ratio", "price_book_ratio", "pnl_ratio_book"
+                        "price_ratio_ead", "Price_to_EAD",
+                        "price_ratio_book", "audit_price_book_ratio",
+                        "pnl_ratio_book",
                     )
-                    avg_bid_pct_ead = 0.0 if np.isnan(avg_bid_pct_ead_val) else avg_bid_pct_ead_val
+                    # avg_bid_pct_ead_available: True if the KPI could be computed
+                    avg_bid_pct_ead_available = not np.isnan(avg_bid_pct_ead_val)
+                    # Honest NaN stored as empty string in CSV when not available
+                    avg_bid_pct_ead = (
+                        round(float(avg_bid_pct_ead_val), 4) if avg_bid_pct_ead_available else np.nan
+                    )
 
                     # sell_blocked_count: loans where sell was requested but blocked by fire-sale guardrail
                     if "Sell_Blocked" in df_res.columns:
@@ -310,7 +322,8 @@ def run_stress_pipeline(tag: str, portfolio_path: str, scenarios_yaml: str, post
                         # --- PC10 pricing KPIs ---
                         "sale_pnl_total": round(sale_pnl_total, 2),
                         "avg_sale_pnl": round(avg_sale_pnl, 2),
-                        "avg_bid_pct_ead": round(avg_bid_pct_ead, 4),
+                        "avg_bid_pct_ead": avg_bid_pct_ead,           # NaN if unavailable
+                        "avg_bid_pct_ead_available": avg_bid_pct_ead_available,
                         "sell_blocked_count": sell_blocked_count,
                     })
                  else:
