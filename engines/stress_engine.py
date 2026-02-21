@@ -237,6 +237,64 @@ def run_stress_pipeline(tag: str, portfolio_path: str, scenarios_yaml: str, post
                                 return df[n].sum()
                         return default
 
+                    def _col_mean(df, *names, default=np.nan):
+                        for n in names:
+                            if n in df.columns:
+                                v = pd.to_numeric(df[n], errors="coerce").dropna()
+                                return float(v.mean()) if len(v) > 0 else default
+                        return default
+
+                    def _col_mean_filtered(df, mask, *names, default=np.nan):
+                        """Mean of column restricted to rows where mask is True."""
+                        for n in names:
+                            if n in df.columns:
+                                v = pd.to_numeric(df.loc[mask, n], errors="coerce").dropna()
+                                return float(v.mean()) if len(v) > 0 else default
+                        return default
+
+                    def _col_sum_filtered(df, mask, *names, default=0.0):
+                        """Sum of column restricted to rows where mask is True."""
+                        for n in names:
+                            if n in df.columns:
+                                v = pd.to_numeric(df.loc[mask, n], errors="coerce").fillna(0.0)
+                                return float(v.sum())
+                        return default
+
+                    # Mask for sold loans
+                    sell_mask = (
+                        df_res["Accion_final"] == "VENDER"
+                        if "Accion_final" in df_res.columns
+                        else pd.Series([False] * len(df_res), index=df_res.index)
+                    )
+
+                    # --- Pricing KPIs (PC10) ---
+                    # sale_pnl_total: realized P&L sum across sold loans
+                    sale_pnl_total = _col_sum_filtered(
+                        df_res, sell_mask, "pnl_realized", "pnl", "pnl_book"
+                    )
+                    # avg_sale_pnl: mean P&L per sale (NaN if no sales → 0 for CSV)
+                    avg_sale_pnl_val = _col_mean_filtered(
+                        df_res, sell_mask, "pnl_realized", "pnl", "pnl_book"
+                    )
+                    avg_sale_pnl = 0.0 if np.isnan(avg_sale_pnl_val) else avg_sale_pnl_val
+
+                    # avg_bid_pct_ead: mean price/book for sold loans (best available proxy)
+                    avg_bid_pct_ead_val = _col_mean_filtered(
+                        df_res, sell_mask,
+                        "audit_price_book_ratio", "price_book_ratio", "pnl_ratio_book"
+                    )
+                    avg_bid_pct_ead = 0.0 if np.isnan(avg_bid_pct_ead_val) else avg_bid_pct_ead_val
+
+                    # sell_blocked_count: loans where sell was requested but blocked by fire-sale guardrail
+                    if "Sell_Blocked" in df_res.columns:
+                        sell_blocked_count = int(df_res["Sell_Blocked"].fillna(False).astype(bool).sum())
+                    elif "reason_code" in df_res.columns:
+                        sell_blocked_count = int(
+                            df_res["reason_code"].astype(str).str.contains("RC02_SELL_BLOCKED").sum()
+                        )
+                    else:
+                        sell_blocked_count = 0
+
                     summary_records.append({
                         "scenario": sc_name,
                         "posture": posture,
@@ -246,9 +304,14 @@ def run_stress_pipeline(tag: str, portfolio_path: str, scenarios_yaml: str, post
                         "total_rwa_post": _col(df_res, "RWA_post", "rwa_after"),
                         "total_rwa_pre": _col(df_res, "RWA_pre", "rwa_before"),
                         "capital_liberado": _col(df_res, "capital_liberado", "capital_release_net"),
-                        "n_sales": int((df_res["Accion_final"] == "VENDER").sum()) if "Accion_final" in df_res.columns else 0,
+                        "n_sales": int(sell_mask.sum()),
                         "n_restruct": int((df_res["Accion_final"] == "REESTRUCTURAR").sum()) if "Accion_final" in df_res.columns else 0,
                         "n_mantener": int((df_res["Accion_final"] == "MANTENER").sum()) if "Accion_final" in df_res.columns else 0,
+                        # --- PC10 pricing KPIs ---
+                        "sale_pnl_total": round(sale_pnl_total, 2),
+                        "avg_sale_pnl": round(avg_sale_pnl, 2),
+                        "avg_bid_pct_ead": round(avg_bid_pct_ead, 4),
+                        "sell_blocked_count": sell_blocked_count,
                     })
                  else:
                     logger.warning(f"No results found for {sc_name} / {posture}")

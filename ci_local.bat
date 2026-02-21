@@ -74,6 +74,20 @@ if not exist "reports\stress_summary_%TAG%.csv" (
     exit /b 1
 )
 echo [OK] Stress summary: reports\stress_summary_%TAG%.csv >> %LOGFILE%
+:: PC10: Verify pricing KPI columns exist in stress summary
+powershell -Command "try { $csv=Import-Csv 'reports\stress_summary_%TAG%.csv'; $cols=$csv[0].PSObject.Properties.Name; $kpis='sale_pnl_total','avg_sale_pnl','avg_bid_pct_ead','sell_blocked_count'; $missing=$kpis | Where-Object {$_ -notin $cols}; if($missing){Write-Output \"[ERROR] PC10 KPI columns missing in stress_summary: $($missing -join ', ')\"; exit 1}else{Write-Output '[OK] PC10 pricing KPI columns present in stress_summary'} } catch { Write-Output '[SKIP] Could not verify PC10 KPI columns' }" >> %LOGFILE% 2>&1
+if !errorlevel! equ 1 (
+    echo [ERROR] PC10 pricing KPI columns missing in stress_summary. See %LOGFILE%
+    exit /b 1
+)
+:: PC10: Run pricing KPI tests explicitly (fast, model-free)
+echo [%time%] 3.6. Running PC10 Pricing KPI Tests...
+python -m pytest tests/test_stress_summary_pricing_kpis.py -v >> %LOGFILE% 2>&1
+if !errorlevel! neq 0 (
+    echo [ERROR] PC10 pricing KPI tests failed. See %LOGFILE%
+    exit /b 1
+)
+echo [OK] PC10 pricing KPI tests passed >> %LOGFILE%
 :: Warn if pricing_crunch rows are identical to baseline (would indicate no-op pricing shock)
 powershell -Command "try { $df=Import-Csv 'reports\stress_summary_%TAG%.csv'; $bl=($df | Where-Object {$_.scenario -eq 'baseline'} | Measure-Object -Property n_sales -Sum).Sum; $pc=($df | Where-Object {$_.scenario -eq 'pricing_crunch'} | Measure-Object -Property n_sales -Sum).Sum; if($bl -eq $pc){Write-Output '[WARNING] pricing_crunch n_sales identical to baseline - BID_HAIRCUT_GLOBAL may not be applied'}else{Write-Output '[OK] pricing_crunch differs from baseline (pricing shock operative)'} } catch { Write-Output '[SKIP] Could not compare pricing_crunch vs baseline' }" >> %LOGFILE% 2>&1
 
