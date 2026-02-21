@@ -75,3 +75,6 @@ data/*.xlsx
 # Editor settings
 # =========================
 .vscode/
+
+# Test caches
+.pytest_cache/
