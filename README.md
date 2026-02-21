@@ -708,11 +708,11 @@ tests/                              <- suite pytest completa
 
 El proyecto mantiene trazabilidad completa en todos los niveles:
 
-* **Nivel código:** ramas Git por Punto de Control (PC). Rama activa: `feat/pc10-pricing-kpis-stress` (HEAD: ceb5dcf). `main` recibe merges aprobados por comité.
+* **Nivel código:** ramas Git por Punto de Control (PC). Rama activa: `feat/pc10-pricing-kpis-stress` (HEAD: e51b40d). `main` recibe merges aprobados por comité.
 * **Nivel ejecución:** cada run genera timestamps únicos en nombres de carpetas y ficheros. `MANIFEST.json` registra commit exacto, estado del repo (clean/dirty), checksums SHA-256 de modelos.
 * **Nivel decisión:** `overrides_log_<postura>.csv` registra cada override prudencial con su motivo. `decisiones_audit_<postura>.csv` es el registro loan-by-loan completo.
 * **Nivel CI:** `ci_local.bat` ejecuta la suite completa con evidencias en `logs/qa_checkpoint<N>_evidence.txt`.
 
-El pack definitivo de PC10 es: `reports/committee_pack_pc10_hardening_final_20260221_125131/` (commit=ceb5dcf, status=clean).
+El pack definitivo de PC10 es: `reports/committee_pack_pc10_hardening_final_20260221_202331/` (commit=e51b40d, status=clean).
 
 `config.py` es la pieza central que garantiza coherencia entre todos los componentes: entornos RL, motores financieros, engines y agentes importan de un único fichero de configuración, garantizando alineación regulatoria y técnica a lo largo de toda la cadena.

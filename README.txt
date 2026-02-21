@@ -349,7 +349,8 @@ Flujo interno:
 
 Invocacion:
   .\.venv\Scripts\python -m engines.stress_engine --tag pc10_final_clean
-  o via bat: .un_inference_only.bat
+  o via bat: .
+un_inference_only.bat
 
 ----------------------------------------------------------------------
 
@@ -759,7 +760,7 @@ ci_local.bat -- Steps del CI completo:
 El proyecto mantiene trazabilidad completa en todos los niveles:
 
   Nivel codigo    : Ramas Git por Punto de Control (PC). Rama activa:
-                    feat/pc10-pricing-kpis-stress (HEAD: ceb5dcf).
+                    feat/pc10-pricing-kpis-stress (HEAD: e51b40d).
                     main recibe merges aprobados por comite.
 
   Nivel ejecucion : Cada run genera timestamps unicos en nombres de carpetas.
@@ -773,8 +774,8 @@ El proyecto mantiene trazabilidad completa en todos los niveles:
   Nivel CI        : ci_local.bat ejecuta la suite completa con evidencias en
                     logs/qa_checkpoint<N>_evidence.txt.
 
-Pack definitivo PC10: reports/committee_pack_pc10_hardening_final_20260221_125131/
-  (commit=ceb5dcf, status=clean)
+Pack definitivo PC10: reports/committee_pack_pc10_hardening_final_20260221_202331/
+  (commit=e51b40d, status=clean)
 
 config.py es la pieza central que garantiza coherencia entre todos los
 componentes: entornos RL, motores financieros, engines y agentes importan de un
