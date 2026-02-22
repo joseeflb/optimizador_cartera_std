@@ -2481,7 +2481,7 @@ def run_coordinator_inference(
     df_port = _load_portfolio_df(portfolio_path)
 
     # 1) MICRO
-    df_micro, _ = _run_micro_inference(
+    df_micro, _tmp_micro_dir = _run_micro_inference(
         model_path=model_micro,
         portfolio_path=portfolio_path,
         vecnorm_path=vecnorm_micro_path,
@@ -2491,11 +2491,15 @@ def run_coordinator_inference(
         seed=seed,
         deterministic=deterministic,
     )
+    # Limpiar directorio intermedio micro (datos ya en memoria)
+    if _tmp_micro_dir and os.path.isdir(_tmp_micro_dir):
+        shutil.rmtree(_tmp_micro_dir, ignore_errors=True)
+        logger.debug(f"[CLEAN] Eliminado dir intermedio micro: {_tmp_micro_dir}")
 
     # 2) MACRO
     macro_actions: Dict[str, Dict[str, Any]] = {}
     if model_macro is not None and os.path.exists(model_macro):
-        df_steps, _ = _run_macro_inference(
+        df_steps, _tmp_macro_dir = _run_macro_inference(
             model_path_portfolio=model_macro,
             portfolio_path=portfolio_path,
             risk_posture=risk_posture,
@@ -2510,6 +2514,10 @@ def run_coordinator_inference(
             vecnormalize_loan_path=vecnorm_loan_path,
         )
         macro_actions = _build_macro_actions_per_loan(df_steps)
+        # Limpiar directorio intermedio macro (datos ya en memoria)
+        if _tmp_macro_dir and os.path.isdir(_tmp_macro_dir):
+            shutil.rmtree(_tmp_macro_dir, ignore_errors=True)
+            logger.debug(f"[CLEAN] Eliminado dir intermedio macro: {_tmp_macro_dir}")
     else:
         logger.warning("[WARN] No se ha encontrado modelo MACRO; se usarán solo decisiones micro.")
 
