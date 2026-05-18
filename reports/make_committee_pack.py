@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+# ============================================================
+# reports/make_committee_pack.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Empaqueta el committee pack reproducible: artefactos, logs, config, manifest (git hash, env, checksums).
+# ============================================================
 """
 reports/make_committee_pack.py
 

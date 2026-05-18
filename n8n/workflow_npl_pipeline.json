@@ -1,0 +1,292 @@
+{
+  "name": "NPL Portfolio Optimizer – Full Pipeline",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "trigger-manual",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [0, 0]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "weeks", "weeksInterval": 1 }]
+        }
+      },
+      "id": "trigger-cron",
+      "name": "Weekly Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 200]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "npl-pipeline",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "trigger-webhook",
+      "name": "Webhook (Dashboard)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 400]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Merge trigger inputs into unified config\nconst defaults = {\n  tag: 'run_' + new Date().toISOString().slice(0,10).replace(/-/g,''),\n  n_loans: 500,\n  portfolio_path: 'data/portfolio_synth.xlsx',\n  postures: ['prudencial', 'balanceado', 'desinversion'],\n  train_if_missing: true,\n  total_steps_loan: 500000,\n  total_steps_portfolio: 200000,\n  stress_scenarios: 'configs/stress_scenarios.yaml',\n  quarters_backtest: 8,\n  seed: 42,\n  working_dir: 'C:\\\\Users\\\\EV543NB\\\\OneDrive - EY\\\\Desktop\\\\optimizador_cartera_std'\n};\n\nconst input = $input.item.json || {};\nconst config = { ...defaults, ...input };\n\nreturn { json: config };"
+      },
+      "id": "set-config",
+      "name": "1 · Set Run Config",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [300, 200]
+    },
+    {
+      "parameters": {
+        "command": "={{ 'cd \"' + $json.working_dir + '\" && py main.py generate --n ' + $json.n_loans + ' --out ' + $json.portfolio_path }}",
+        "cwd": "={{ $json.working_dir }}"
+      },
+      "id": "generate-portfolio",
+      "name": "2 · Generate Portfolio",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [550, 200]
+    },
+    {
+      "parameters": {
+        "command": "={{ 'cd \"' + $json.working_dir + '\" && py -c \"import hashlib, pathlib; p=pathlib.Path(\\'' + $json.portfolio_path + '\\'); print(hashlib.sha256(p.read_bytes()).hexdigest())\"' }}",
+        "cwd": "={{ $json.working_dir }}"
+      },
+      "id": "checksum-portfolio",
+      "name": "2b · SHA-256 Check",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [750, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "check-model",
+              "leftValue": "={{ $json.train_if_missing }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-model-exists",
+      "name": "3a · Model exists?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [950, 200]
+    },
+    {
+      "parameters": {
+        "command": "={{ 'cd \"' + $json.working_dir + '\" && py -m agent.train_subagents --agent both --portfolio ' + $json.portfolio_path + ' --total-steps-loan ' + $json.total_steps_loan + ' --total-steps-portfolio ' + $json.total_steps_portfolio }}",
+        "cwd": "={{ $json.working_dir }}"
+      },
+      "id": "train-agents",
+      "name": "3b · Train Agents",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1200, 100]
+    },
+    {
+      "parameters": {
+        "command": "={{ 'cd \"' + $json.working_dir + '\" && py main.py infer --model-micro models/best_model_loan.zip --model-macro models/best_model_portfolio.zip --portfolio ' + $json.portfolio_path + ' --all-postures --tag ' + $json.tag + ' --seed ' + $json.seed }}",
+        "cwd": "={{ $json.working_dir }}"
+      },
+      "id": "inference",
+      "name": "4 · Coordinated Inference",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1500, 200]
+    },
+    {
+      "parameters": {
+        "command": "={{ 'cd \"' + $json.working_dir + '\" && py -m engines.stress_engine --tag ' + $json.tag + ' --portfolio ' + $json.portfolio_path }}",
+        "cwd": "={{ $json.working_dir }}"
+      },
+      "id": "stress-engine",
+      "name": "5 · Stress Engine (4×3)",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1750, 100]
+    },
+    {
+      "parameters": {
+        "command": "={{ 'cd \"' + $json.working_dir + '\" && py -m reports.npl_posture_analysis --tag ' + $json.tag }}",
+        "cwd": "={{ $json.working_dir }}"
+      },
+      "id": "npl-analysis",
+      "name": "6 · NPL Workout Layer",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [1750, 300]
+    },
+    {
+      "parameters": {
+        "command": "={{ 'cd \"' + $json.working_dir + '\" && py -m reports.backtesting_dynamic --tag ' + $json.tag + ' --quarters ' + $json.quarters_backtest + ' --seed ' + $json.seed }}",
+        "cwd": "={{ $json.working_dir }}"
+      },
+      "id": "backtesting",
+      "name": "7 · Backtesting Dynamic",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [2050, 200]
+    },
+    {
+      "parameters": {
+        "command": "={{ 'cd \"' + $json.working_dir + '\" && py -m reports.make_committee_pack --tag ' + $json.tag }}",
+        "cwd": "={{ $json.working_dir }}"
+      },
+      "id": "committee-pack",
+      "name": "8 · Committee Pack",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 1,
+      "position": [2300, 200]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Collect run results for dashboard API\nconst fs = require('fs');\nconst path = require('path');\nconst wd = $json.working_dir;\nconst tag = $json.tag;\n\n// Find DELIVERABLE folder\nconst runsDir = path.join(wd, 'reports', 'runs');\nlet delivDir = null;\nif (fs.existsSync(runsDir)) {\n  const folders = fs.readdirSync(runsDir).filter(f => f.includes(tag) && f.includes('DELIVERABLE'));\n  if (folders.length > 0) delivDir = path.join(runsDir, folders[folders.length - 1]);\n}\n\n// Read backtesting CSV\nlet backtesting = [];\nconst btPath = path.join(wd, 'reports', `backtesting_dynamic_${tag}.csv`);\nif (fs.existsSync(btPath)) {\n  backtesting = fs.readFileSync(btPath, 'utf-8').trim();\n}\n\n// Read posture analysis\nlet postureAnalysis = '';\nconst paPath = path.join(wd, 'reports', `POSTURE_ANALYSIS_NPL_${tag}.md`);\nif (fs.existsSync(paPath)) {\n  postureAnalysis = fs.readFileSync(paPath, 'utf-8');\n}\n\nreturn {\n  json: {\n    tag,\n    deliverable_path: delivDir,\n    backtesting_csv: backtesting,\n    posture_analysis: postureAnalysis,\n    timestamp: new Date().toISOString(),\n    status: 'COMPLETED'\n  }\n};"
+      },
+      "id": "collect-results",
+      "name": "9a · Collect Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [2550, 200]
+    },
+    {
+      "parameters": {
+        "url": "http://localhost:3000/api/runs",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "update-dashboard",
+      "name": "9b · Update Dashboard",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [2800, 200],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "return {\n  json: {\n    pipeline: 'NPL Portfolio Optimizer',\n    tag: $json.tag,\n    status: $json.status || 'COMPLETED',\n    timestamp: $json.timestamp || new Date().toISOString(),\n    message: `Pipeline ${$json.tag} completado. Dashboard actualizado.`\n  }\n};"
+      },
+      "id": "final-summary",
+      "name": "10 · Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [3050, 200]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [
+        [{ "node": "1 · Set Run Config", "type": "main", "index": 0 }]
+      ]
+    },
+    "Weekly Schedule": {
+      "main": [
+        [{ "node": "1 · Set Run Config", "type": "main", "index": 0 }]
+      ]
+    },
+    "Webhook (Dashboard)": {
+      "main": [
+        [{ "node": "1 · Set Run Config", "type": "main", "index": 0 }]
+      ]
+    },
+    "1 · Set Run Config": {
+      "main": [
+        [{ "node": "2 · Generate Portfolio", "type": "main", "index": 0 }]
+      ]
+    },
+    "2 · Generate Portfolio": {
+      "main": [
+        [{ "node": "2b · SHA-256 Check", "type": "main", "index": 0 }]
+      ]
+    },
+    "2b · SHA-256 Check": {
+      "main": [
+        [{ "node": "3a · Model exists?", "type": "main", "index": 0 }]
+      ]
+    },
+    "3a · Model exists?": {
+      "main": [
+        [{ "node": "3b · Train Agents", "type": "main", "index": 0 }],
+        [{ "node": "4 · Coordinated Inference", "type": "main", "index": 0 }]
+      ]
+    },
+    "3b · Train Agents": {
+      "main": [
+        [{ "node": "4 · Coordinated Inference", "type": "main", "index": 0 }]
+      ]
+    },
+    "4 · Coordinated Inference": {
+      "main": [
+        [
+          { "node": "5 · Stress Engine (4×3)", "type": "main", "index": 0 },
+          { "node": "6 · NPL Workout Layer", "type": "main", "index": 0 }
+        ]
+      ]
+    },
+    "5 · Stress Engine (4×3)": {
+      "main": [
+        [{ "node": "7 · Backtesting Dynamic", "type": "main", "index": 0 }]
+      ]
+    },
+    "6 · NPL Workout Layer": {
+      "main": [
+        [{ "node": "7 · Backtesting Dynamic", "type": "main", "index": 0 }]
+      ]
+    },
+    "7 · Backtesting Dynamic": {
+      "main": [
+        [{ "node": "8 · Committee Pack", "type": "main", "index": 0 }]
+      ]
+    },
+    "8 · Committee Pack": {
+      "main": [
+        [{ "node": "9a · Collect Results", "type": "main", "index": 0 }]
+      ]
+    },
+    "9a · Collect Results": {
+      "main": [
+        [{ "node": "9b · Update Dashboard", "type": "main", "index": 0 }]
+      ]
+    },
+    "9b · Update Dashboard": {
+      "main": [
+        [{ "node": "10 · Summary", "type": "main", "index": 0 }]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": ""
+  },
+  "staticData": null,
+  "tags": [
+    { "name": "NPL", "id": "1" },
+    { "name": "portfolio-optimizer", "id": "2" },
+    { "name": "production", "id": "3" }
+  ],
+  "pinData": {},
+  "versionId": "1.0.0"
+}

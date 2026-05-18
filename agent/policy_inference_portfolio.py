@@ -1,8 +1,9 @@
-# ============================================
+# -*- coding: utf-8 -*-
+# ============================================================
 # agent/policy_inference_portfolio.py
-# — Inferencia PPO a nivel de CARTERA COMPLETA (PortfolioEnv)
-# (CORREGIDO v3.7.0 · VecNormalize robusto por shape + decisiones audit-ready)
-# ============================================
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Inferencia PPO a nivel de cartera completa (PortfolioEnv) con VecNormalize robusto por shape y decisiones audit-ready.
+# ============================================================
 
 from __future__ import annotations
 

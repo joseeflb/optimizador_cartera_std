@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-# ============================================
-# optimizer/price_simulator.py — Simulador de precio de venta (mercado secundario NPL)
-# v2.3.1 (FIXED · Override threshold robusto · Default realista · Triggers auditables · PnL vs Book)
-# ============================================
+# ============================================================
+# optimizer/price_simulator.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Simulador de precio de venta NPL (mercado secundario): override de fire-sale, default realista, triggers auditables, PnL vs book.
+# ============================================================
+
 from __future__ import annotations
 
 import math

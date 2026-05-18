@@ -1,3 +1,9 @@
+# -*- coding: utf-8 -*-
+# ============================================================
+# tests/test_guardrails_sell.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Tests unitarios del guardrail de venta (fire-sale threshold, capital, PnL).
+# ============================================================
 import pytest
 from optimizer.guardrails import check_sell_constraints
 

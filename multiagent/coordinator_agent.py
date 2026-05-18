@@ -1,7 +1,9 @@
-# ============================================
-# multiagent/coordinator_agent.py — Banco L1.5
-# Coordinador jerárquico (macro ↔ micro)
-# ============================================
+# -*- coding: utf-8 -*-
+# ============================================================
+# multiagent/coordinator_agent.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Coordinador del sistema multi-agente: combina RestructAgent + PricingAgent con políticas de arbitraje.
+# ============================================================
 
 from __future__ import annotations
 from typing import Dict, Any, Tuple, Optional

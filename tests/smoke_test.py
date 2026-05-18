@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# ============================================================
+# tests/smoke_test.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Smoke tests bank-ready: PortfolioEnv, LoanEnv, simulate_npl_price y VecNormalize micro.
+# ============================================================
 """
 Smoke tests (bank-ready):
 1) PortfolioEnv reset/step for actions 0..11

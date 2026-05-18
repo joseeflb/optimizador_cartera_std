@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
-# ============================================
-# reports/results_summary.py — Consolidación y resumen ejecutivo (v4.3.1 bank-safe)
-# ============================================
+# ============================================================
+# reports/results_summary.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Consolidación RUN-LEVEL: recorre summary.csv recursivamente y exporta CSV/JSON/Excel estilado.
+# ============================================================
+
 """
 Consolidado RUN-LEVEL:
 - Consolida summary.csv recursivamente

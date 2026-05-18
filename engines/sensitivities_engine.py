@@ -1,7 +1,9 @@
-# ============================================
-# engines/sensitivities_engine.py — Banco L1.5
-# Sensitividades financieras STD (Basilea III)
-# ============================================
+# -*- coding: utf-8 -*-
+# ============================================================
+# engines/sensitivities_engine.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Análisis de sensibilidad financiera (Basilea III STD) sobre variables clave (PD, LGD, fire-sale threshold, rate, etc.).
+# ============================================================
 
 import os, sys, argparse, logging, time
 import pandas as pd

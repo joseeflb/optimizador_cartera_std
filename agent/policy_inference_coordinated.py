@@ -1,8 +1,10 @@
-# ============================================
+# -*- coding: utf-8 -*-
+# ============================================================
 # agent/policy_inference_coordinated.py
-# — Decisión coordinada MICRO+MACRO (estilo analista IB)
-# v2.2 (BANK-READY · guardrails fire-sale vs BOOK · reestructura bankable · audit trail)
-# ============================================
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Decisión coordinada MICRO+MACRO estilo analista IB, con guardrails fire-sale vs BOOK_VALUE, reestructura bankable y audit trail.
+# ============================================================
+
 """
 POC — OPTIMIZADOR DE CARTERAS EN DEFAULT (NPL · Basilea III STD)
 

@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-# ============================================
-# env/loan_env.py — LoanEnv v6.4 (AUDIT-READY)
-# (Banco L1.5 · STD · EVA-Optimal RL · NPL)
-# ============================================
+# ============================================================
+# env/loan_env.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Entorno Gymnasium para préstamo individual: 3 acciones (MANTENER/REESTRUCTURAR/VENDER), 10 features de observación, función de recompensa NPL bajo Basilea III STD.
+# ============================================================
+
 """
 POC — Entorno RL para optimización de carteras en default (Basilea III · Banco L1.5)
 
@@ -53,7 +55,7 @@ from risk.gates import check_restruct_viability
 
 
 # ---------------------------------------------------------------
-# [U1F527] Configuración
+# [U1F527] Configuración (defaults globales; el env permite override por instancia)
 # ---------------------------------------------------------------
 RESTRUCT_CFG = cfg.CONFIG.reestructura
 SENS_CFG = cfg.CONFIG.sensibilidad_reestructura
@@ -62,6 +64,21 @@ REG_CFG = cfg.CONFIG.regulacion
 HURDLE = float(REG_CFG.hurdle_rate)
 BANK_STRAT = cfg.CONFIG.bank_strategy
 REWARD_CFG = cfg.CONFIG.reward
+
+
+def _coerce_bank_profile(value: Any) -> Optional["cfg.BankProfile"]:
+    """Acepta enum, str o None y devuelve un BankProfile o None."""
+    if value is None:
+        return None
+    if isinstance(value, cfg.BankProfile):
+        return value
+    try:
+        key = str(value).strip().upper()
+        alias = {"PRUDENCIAL": "PRUDENTE", "BALANCED": "BALANCEADO"}
+        key = alias.get(key, key)
+        return cfg.BankProfile[key]
+    except Exception:
+        return None
 
 # Funding cost consistente con generate_portfolio.py y resto del pipeline
 COST_FUND = 0.006
@@ -90,7 +107,12 @@ class LoanEnv(gym.Env):
     # -----------------------------------------------------------
     # INIT
     # -----------------------------------------------------------
-    def __init__(self, loan_pool: Optional[List[Dict[str, Any]]] = None, seed: Optional[int] = None):
+    def __init__(
+        self,
+        loan_pool: Optional[List[Dict[str, Any]]] = None,
+        seed: Optional[int] = None,
+        bank_profile: Any = None,
+    ):
         super().__init__()
         self.rng = np.random.default_rng(seed or cfg.GLOBAL_SEED)
         self.loan_pool = loan_pool or []
@@ -98,12 +120,22 @@ class LoanEnv(gym.Env):
         self.steps = 0
         self.state: Dict[str, Any] = {}
 
+        # [POSTURE] Resolver postura por instancia (override) o tomar el default global
+        self.bank_profile_override = _coerce_bank_profile(bank_profile)
+        if self.bank_profile_override is not None:
+            strat = cfg.BANK_STRATEGIES[self.bank_profile_override]
+            self.bank_strategy = strat
+            self.reward_cfg = cfg.RewardParams.from_strategy(strat)
+            self.bank_profile = self.bank_profile_override
+        else:
+            self.bank_strategy = BANK_STRAT
+            self.reward_cfg = REWARD_CFG
+            self.bank_profile = cfg.CONFIG.bank_profile
+
         self.hurdle = HURDLE
-        self.reward_cfg = REWARD_CFG
         self.restruct_cfg = RESTRUCT_CFG
         self.sens_cfg = SENS_CFG
         self.cfg = ENV_CFG
-        self.bank_strategy = BANK_STRAT
 
         # [OK] Consistencia NI/EVA con el generador:
         # PD en NPL = forward a horizonte; EL es lifetime al horizonte y se anualiza para NI.
@@ -719,7 +751,9 @@ class LoanEnv(gym.Env):
         # -------------------------------------------------------
         # Recalcular métricas solo si NO es venta
         # -------------------------------------------------------
-        if action != 2:
+        sold_this_step = (action == 2)
+
+        if not sold_this_step:
             st1["RWA"] = float(st1["EAD"] * st1["RW"])
 
             econ1 = self._econ_true(
@@ -750,6 +784,10 @@ class LoanEnv(gym.Env):
             if action == 1 and rwa0 > 0.0:
                 capital_release = max(0.0, (float(rwa0) - float(st1["RWA"])) * CAP_RATIO)
 
+        # NOTA: si vendió, NO reemplazamos st1 aquí. Hacerlo antes del cálculo
+        # de reward contaminaba risk_proxy/cure_bonus/dscr_bonus con el SIGUIENTE
+        # préstamo. La transición al siguiente loan se ejecuta tras computar la reward.
+
         # -------------------------------------------------------
         # Reward (coherente con policy_inference)
         # -------------------------------------------------------
@@ -766,18 +804,18 @@ class LoanEnv(gym.Env):
 
         pti1 = float(st1.get("PTI", 0.0))
         excess_pti = max(0.0, pti1 - esfuerzo_bajo) / max(1e-6, esfuerzo_alto)
-        pti_penalty = float(excess_pti * abs(eva0))
+        pti_penalty = float(excess_pti * abs(eva0) / 1e6)
 
         # [OK] risk_proxy lifetime (no annual)
         risk_proxy = float(st1.get("EL", st1.get("PD", 0.0) * st1.get("LGD", 0.0) * st1.get("EAD", 0.0)))
 
         cure_bonus = 0.0
         if (not cured0) and bool(st1.get("cured", False)):
-            cure_bonus = float(0.2 * abs(eva0 if eva0 != 0 else float(st1.get("EVA", 0.0))))
+            cure_bonus = float(0.2 * abs(eva0 if eva0 != 0 else float(st1.get("EVA", 0.0))) / 1e6)
 
         # P&L escalado (venta)
         w_pnl = float(getattr(self.reward_cfg, "w_pnl", 0.0))
-        pnl_scaled = float(pnl_sale / max(self.pnl_penalty_scale, 1.0))
+        pnl_scaled = float(pnl_sale / 1e6)
 
         dscr_min = float(getattr(self.bank_strategy, "dscr_min", 1.0))
         dscr1 = float(st1.get("DSCR", 0.0))
@@ -785,10 +823,14 @@ class LoanEnv(gym.Env):
         w_dscr = float(getattr(self.reward_cfg, "w_dscr_bonus", 0.0))
         dscr_bonus = float(w_dscr * dscr_excess)
 
+        # ───────────────────────────────────────────────────
+        # Reward escalado a ÷1e6 (coherente con PortfolioEnv)
+        # Todos los términos monetarios en MM€ para estabilidad
+        # ───────────────────────────────────────────────────
         r = (
-            float(self.reward_cfg.w_eva) * eva_gain
-            + float(self.reward_cfg.w_capital) * rel_cap * 1e4
-            - float(self.reward_cfg.w_stab) * (risk_proxy / 1e4)
+            float(self.reward_cfg.w_eva) * (eva_gain / 1e6)
+            + float(self.reward_cfg.w_capital) * (capital_release / 1e6)
+            - float(self.reward_cfg.w_stab) * (risk_proxy / 1e6)
             - 0.1 * pti_penalty
             + cure_bonus
             + w_pnl * pnl_scaled
@@ -797,30 +839,52 @@ class LoanEnv(gym.Env):
 
         # Bonus por mantener EVA positiva (no tocar lo que va bien)
         if eva0 > 0 and action == 0:
-            r += float(self.reward_cfg.maintain_bonus_eva_pos) * abs(eva0)
+            r += float(self.reward_cfg.maintain_bonus_eva_pos) * (abs(eva0) / 1e6)
+
+        # Bonus por reestructuración exitosa (EVA mejoró) — corrige infraponderación micro
+        if action == 1 and eva_gain > 0:
+            restruct_bonus_w = float(getattr(self.reward_cfg, "restruct_bonus_eva_gain", 0.0))
+            r += restruct_bonus_w * (eva_gain / 1e6)
 
         # Venta cuando EVA era negativa (limpia value-destroyers)
         if eva0 < 0 and action == 2:
-            scale = float(np.tanh(abs(eva0) / 1e5))
-            r += float(self.reward_cfg.sell_bonus_eva_neg) * scale
+            r += float(self.reward_cfg.sell_bonus_eva_neg) * (abs(eva0) / 1e6)
+
+        # Bonus por vender alto riesgo (PD alta) — corrige inversión rating-sell
+        if action == 2:
+            pd0_val = float(st0.get("PD", 0.0))
+            sell_risk_w = float(getattr(self.reward_cfg, "sell_risk_bonus", 0.0))
+            if pd0_val > 0.45:  # préstamos de alto riesgo
+                risk_signal = (pd0_val - 0.35) / 0.50  # normalizado 0..1
+                r += sell_risk_w * risk_signal * (abs(eva0) / 1e6)
 
         # Penalización explícita fire-sale (precio/book o pnl contable negativo)
         if action == 2 and fire_sale_flag:
-            scale = float(np.tanh(abs(pnl_sale) / 1e5))
-            r -= float(getattr(self.reward_cfg, "penalty_fire_sale", 0.0)) * scale
+            r -= float(getattr(self.reward_cfg, "penalty_fire_sale", 0.0)) * (abs(pnl_sale) / 1e6)
 
-        # mode collapse penalty
+        # mode collapse penalty (cross-episode: detecta repetición excesiva)
         self.last_actions.append(int(action))
         if len(self.last_actions) > self.max_last_actions:
             self.last_actions.pop(0)
-        if self.last_actions.count(1) / max(1, len(self.last_actions)) > 0.7:
-            r -= float(self.reward_cfg.penalty_mode_collapse) * len(self.last_actions)
+        if len(self.last_actions) >= 10:
+            action_counts = [self.last_actions.count(a) for a in range(self.n_actions)]
+            dominant_ratio = max(action_counts) / len(self.last_actions)
+            if dominant_ratio > 0.80:
+                r -= float(self.reward_cfg.penalty_mode_collapse) * dominant_ratio
 
         r = float(np.clip(r, *self.reward_cfg.clip))
 
         # Gymnasium: terminated vs truncated
-        terminated = bool(action == 2)
-        truncated = bool((not terminated) and (self.steps >= self.max_steps))
+        # Venta termina el PRÉSTAMO (sale de balance) pero el episodio
+        # continúa con otro préstamo para aprender decisiones diversas
+        terminated = bool(self.steps >= self.max_steps)
+        truncated = False
+
+        # [FIX] Tras computar reward sobre el estado POST-decisión del préstamo
+        # actual (con valores a 0 si fue venta), recargamos el siguiente préstamo
+        # del pool para que la observación del próximo step sea coherente.
+        if sold_this_step:
+            st1 = self._next_loan_from_pool()
 
         # Asegurar tipos
         st1["rating_num"] = self._coerce_rating_num(st1)

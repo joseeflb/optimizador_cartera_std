@@ -1,0 +1,24 @@
+{
+  "agent": "portfolio_desinversion",
+  "model_path": "C:\\Users\\EV543NB\\OneDrive - EY\\Desktop\\optimizador_cartera_std\\models\\best_model_portfolio_desinversion.zip",
+  "total_timesteps": 200000,
+  "elapsed_seconds": 10699.4,
+  "ppo_config": {
+    "learning_rate": 0.0001,
+    "n_steps": 4096,
+    "batch_size": 128,
+    "n_epochs": 5,
+    "gamma": 0.995,
+    "ent_coef": 0.02,
+    "clip_range": 0.2,
+    "net_arch": [
+      256,
+      256
+    ]
+  },
+  "eval_summary": {
+    "best_mean_reward": 229.20489381551744,
+    "total_evals": 40,
+    "early_stopped": false
+  }
+}

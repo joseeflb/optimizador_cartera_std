@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-# ============================================
-# env/portfolio_env.py — PortfolioEnv v3.6.1 (micro↔macro aware, AUDIT-READY)
-# (NPL-Ready · Banco L1.5 · Perfiles de banco · Re-ranking con PPO micro + VN robusto)
-# ============================================
+# ============================================================
+# env/portfolio_env.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Entorno Gymnasium para cartera completa: 12 acciones macro, 308 features, recompensa agregada con guardrails y restricciones de concentración.
+# ============================================================
+
 """
 Entorno RL MACRO para optimización de CARTERAS NPL (Non-Performing Loans)
 Compatible con LoanEnv v6.3, simulate_npl_price y Basilea III STD.
@@ -189,6 +191,38 @@ def _coerce_bank_profile(v: Any):
     return BP.BALANCEADO
 
 
+def _coerce_bank_profile_override(v: Any):
+    """Como _coerce_bank_profile pero devuelve None cuando v es None/''.
+
+    Util para overrides explicitos por instancia: si no se pasa, no se altera nada.
+    """
+    if v is None:
+        return None
+    BP = getattr(cfg, "BankProfile", None)
+    if BP is None:
+        return None
+    try:
+        if isinstance(v, BP):
+            return v
+    except Exception:
+        pass
+    s = str(v).strip().lower()
+    if not s:
+        return None
+    s = (
+        s.replace("á", "a").replace("é", "e").replace("í", "i")
+         .replace("ó", "o").replace("ú", "u").replace("ñ", "n")
+    )
+    s = s.replace("-", "_").replace(" ", "_")
+    if s in {"prudente", "prudencial", "prudent", "prudential"}:
+        return BP.PRUDENTE
+    if s in {"desinversion", "desinvertir", "divestment"}:
+        return BP.DESINVERSION
+    if s in {"balanceado", "balanced", "neutral"}:
+        return BP.BALANCEADO
+    return None
+
+
 class PortfolioEnv(gym.Env):
     metadata = {"render_modes": ["human"]}
 
@@ -203,6 +237,7 @@ class PortfolioEnv(gym.Env):
         micro_deterministic: bool = True,
         micro_vecnormalize_path: Optional[str] = None,  # backward-compatible
         allow_fire_sale: Optional[bool] = None,          # backward-compatible
+        bank_profile: Any = None,                        # [POSTURE] override por instancia
     ):
         super().__init__()
 
@@ -219,6 +254,9 @@ class PortfolioEnv(gym.Env):
         self.micro_vec_env = None
         self.micro_vn = None
         self.micro_vn_path_override = micro_vecnormalize_path
+
+        # [POSTURE] override de postura (resolviendo aliases/strings)
+        self.bank_profile_override = _coerce_bank_profile_override(bank_profile)
 
         # refresh config aliases (incluye allow_fire_sale default)
         self.allow_fire_sale_override = allow_fire_sale
@@ -294,12 +332,14 @@ class PortfolioEnv(gym.Env):
     @property
     def PORTFOLIO_OBS_FEATURES(self) -> List[str]:
         """Genera nombres de features dinámicos segun state_dim."""
-        base = ["total_ead", "total_rwa", "total_eva", "total_risk", "num_loans", "avg_pd", "avg_lgd", "avg_rorwa"]
+        base = ["total_ead_mm", "total_rwa_mm", "total_eva_mm", "total_risk_mm",
+                "num_loans_norm", "avg_pd", "avg_lgd", "avg_rorwa"]
         seg_keys = ["SOVEREIGN", "BANK", "CORPORATE", "SME", "RETAIL", "MORTGAGE", "CONSUMER", "LEASING", "OTHER"]
         rating_keys = ["AAA", "AA", "A", "BBB", "BB", "B", "CCC"]
-        
-        names = base + [f"seg_{k}" for k in seg_keys] + [f"rat_{k}" for k in rating_keys]
-        
+        extra = ["step_progress", "hhi_segment", "hhi_rating", "eva_vol_mm"]
+
+        names = base + [f"seg_{k}" for k in seg_keys] + [f"rat_{k}" for k in rating_keys] + extra
+
         current_len = len(names)
         if current_len < self.state_dim:
             names += [f"pad_{i}" for i in range(current_len, self.state_dim)]
@@ -320,9 +360,15 @@ class PortfolioEnv(gym.Env):
         horizon_months = float(getattr(self.sens_cfg, "horizon_months", 24.0))
         self.horizon_years = float(max(1.0, horizon_months / 12.0))
 
-        # bank posture (dinámico)
-        self.bank_profile = _coerce_bank_profile(CFG.bank_profile)
-        self.bank_strategy = CFG.bank_strategy
+        # bank posture (dinámico) — si hay override por instancia, se respeta
+        if getattr(self, "bank_profile_override", None) is not None:
+            self.bank_profile = self.bank_profile_override
+            strat = cfg.BANK_STRATEGIES[self.bank_profile_override]
+            self.bank_strategy = strat
+            self.reward_cfg = cfg.RewardParams.from_strategy(strat)
+        else:
+            self.bank_profile = _coerce_bank_profile(CFG.bank_profile)
+            self.bank_strategy = CFG.bank_strategy
 
         # hurdle y cap ratio robustos
         self.hurdle = float(getattr(self.reg_cfg, "hurdle_rate", 0.0))
@@ -1329,10 +1375,11 @@ class PortfolioEnv(gym.Env):
                 },
                 separators=(",", ":"),
             )
-            logger.info(
-                f"[CONSTRAINT] loan_id={loan.get('loan_id', '')} reason=SELL_FIRE_SALE_BLOCKED "
-                f"metrics={loan['constraint_metrics_json']}"
-            )
+            if self.log_step_details:
+                logger.info(
+                    f"[CONSTRAINT] loan_id={loan.get('loan_id', '')} reason=SELL_FIRE_SALE_BLOCKED "
+                    f"metrics={loan['constraint_metrics_json']}"
+                )
 
             loan["sell_precio_optimo"] = float(precio_optimo)
             loan["sell_px_ead"] = float(px_ead)
@@ -1420,39 +1467,57 @@ class PortfolioEnv(gym.Env):
         lgds = np.array([_safe_float(l.get("LGD", 0.0), 0.0) for l in loans], dtype=float)
         rors = np.array([_safe_float(l.get("RORWA", 0.0), 0.0) for l in loans], dtype=float)
 
-        total_ead = float(eads.sum())
-        total_rwa = float(rwas.sum())
-        total_eva = float(evas.sum())
-        total_risk = float((pds * lgds * eads).sum())  # EL lifetime proxy
-        num_loans = float(len(loans))
+        # Pre-escalar valores monetarios a MM€ para que VecNormalize
+        # trabaje con rangos razonables (no millones de euros crudos)
+        SCALE = 1e6
+        total_ead = float(eads.sum()) / SCALE
+        total_rwa = float(rwas.sum()) / SCALE
+        total_eva = float(evas.sum()) / SCALE
+        total_risk = float((pds * lgds * eads).sum()) / SCALE  # EL lifetime proxy
+        num_loans = float(len(loans)) / 100.0  # normalizar a centenas
 
-        avg_pd = float(pds.mean()) if num_loans > 0 else 0.0
-        avg_lgd = float(lgds.mean()) if num_loans > 0 else 0.0
-        avg_rorwa = float(rors.mean()) if num_loans > 0 else 0.0
+        avg_pd = float(pds.mean()) if len(loans) > 0 else 0.0
+        avg_lgd = float(lgds.mean()) if len(loans) > 0 else 0.0
+        avg_rorwa = float(rors.mean()) if len(loans) > 0 else 0.0
 
         seg_keys = ["SOVEREIGN", "BANK", "CORPORATE", "SME", "RETAIL", "MORTGAGE", "CONSUMER", "LEASING", "OTHER"]
         seg_ead = {k: 0.0 for k in seg_keys}
-        if total_ead > 0:
+        ead_raw = float(eads.sum())
+        if ead_raw > 0:
             for l in loans:
                 seg = self._normalize_segment_bucket(str(l.get("segment", "OTHER")))
                 seg_ead[seg] = seg_ead.get(seg, 0.0) + _safe_float(l.get("EAD", 0.0), 0.0)
-        seg_share = [float(seg_ead[k] / total_ead) if total_ead > 0 else 0.0 for k in seg_keys]
+        seg_share = [float(seg_ead[k] / ead_raw) if ead_raw > 0 else 0.0 for k in seg_keys]
 
         rating_keys = ["AAA", "AA", "A", "BBB", "BB", "B", "CCC"]
         rat_ead = {k: 0.0 for k in rating_keys}
-        if total_ead > 0:
+        if ead_raw > 0:
             for l in loans:
                 rat = str(l.get("rating", "BBB")).upper()
                 if rat not in rat_ead:
                     rat = "BBB"
                 rat_ead[rat] += _safe_float(l.get("EAD", 0.0), 0.0)
-        rat_share = [float(rat_ead[k] / total_ead) if total_ead > 0 else 0.0 for k in rating_keys]
+        rat_share = [float(rat_ead[k] / ead_raw) if ead_raw > 0 else 0.0 for k in rating_keys]
+
+        # Progreso temporal normalizado
+        step_progress = float(self.steps) / max(float(self.max_steps), 1.0)
+
+        # Concentración y volatilidad (señales macro útiles)
+        hhi_seg, hhi_rat = self._concentration_metrics(loans)
+        eva_vol = self._eva_volatility() / SCALE
 
         features: List[float] = [
-            total_ead, total_rwa, total_eva, total_risk, num_loans, avg_pd, avg_lgd, avg_rorwa
+            total_ead, total_rwa, total_eva, total_risk, num_loans,
+            avg_pd, avg_lgd, avg_rorwa,
         ]
-        features += seg_share
-        features += rat_share
+        features += seg_share     # 9 features
+        features += rat_share     # 7 features
+        features += [
+            step_progress,        # progreso del episodio [0,1]
+            hhi_seg,              # concentración segmento [0,1]
+            hhi_rat,              # concentración rating [0,1]
+            eva_vol,              # volatilidad EVA en MM€
+        ]
 
         if len(features) < self.state_dim:
             features.extend([0.0] * (self.state_dim - len(features)))
@@ -1463,7 +1528,7 @@ class PortfolioEnv(gym.Env):
         obs = np.nan_to_num(obs, nan=0.0, posinf=0.0, neginf=0.0)
 
         if self.normalize_obs:
-            obs = np.clip(obs, -1e6, 1e6)
+            obs = np.clip(obs, -1e3, 1e3)
 
         return obs
 
@@ -1933,6 +1998,8 @@ class PortfolioEnv(gym.Env):
         for l in loans_after:
             excess = max(0.0, _safe_float(l.get("PTI", 0.0), 0.0) - esfuerzo_bajo) / max(esfuerzo_alto, 1e-6)
             pti_penalty += excess * abs(_safe_float(l.get("EVA", 0.0), 0.0)) / 1e6
+        # Normalizar por numero de loans para evitar penalty proporcional al tamano de cartera
+        pti_penalty /= max(len(loans_after), 1)
 
         hhi_seg, hhi_rat = self._concentration_metrics(loans_after)
         eva_vol = self._eva_volatility()
@@ -1954,7 +2021,7 @@ class PortfolioEnv(gym.Env):
 
         eva_term = float(w_eva) * (eva_gain / 1e6)
         cap_term = float(w_cap) * (capital_release_total / 1e6)
-        risk_term = -float(w_stab) * (risk1 / 1e6)
+        risk_term = -float(w_stab) * ((risk1 - risk0) / 1e6)
         pti_term = -0.1 * pti_penalty
         pnl_term = float(w_pnl) * (total_pnl / 1e6)
         cure_term = (cure_bonus_total / 1e6)
@@ -1978,8 +2045,23 @@ class PortfolioEnv(gym.Env):
         if eva_sold_neg > 0.0:
             r += float(sell_bonus_eva_neg) * (eva_sold_neg / 1e6)
 
-        if eva0 > 0 and action == 0:
+        if eva0 > 0 and action in (0, 11):
             r += float(maintain_bonus_eva_pos) * (eva0 / 1e6)
+
+        # [OK] FAMILY BONUSES MACRO (posture-aware) - shaping fijo por familia de acci\u00f3n
+        # MAINTAIN={0,11}, SELL={1,2,6,7,8}, RESTRUCT={3,4,5}, MIX={9,10}
+        fam_bonus_maintain = self._p("macro_bonus_maintain", 0.0)
+        fam_bonus_restruct = self._p("macro_bonus_restruct", 0.0)
+        fam_bonus_mix = self._p("macro_bonus_mix", 0.0)
+        fam_penalty_sell = self._p("macro_penalty_sell", 0.0)
+        if action in (0, 11):
+            r += float(fam_bonus_maintain)
+        elif action in (3, 4, 5):
+            r += float(fam_bonus_restruct)
+        elif action in (9, 10):
+            r += float(fam_bonus_mix)
+        elif action in (1, 2, 6, 7, 8):
+            r -= float(fam_penalty_sell)
 
         r = float(np.clip(r, clip_low, clip_high))
 

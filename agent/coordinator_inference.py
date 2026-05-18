@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 # ============================================================
 # agent/coordinator_inference.py
-# — Inferencia coordinada MICRO+MACRO (decisión única por préstamo)
-# (v3.7.0 · macro steering consistente · fire-sale robusto · contrafactuals · schema-stable)
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Inferencia coordinada MICRO+MACRO con arbitraje explícito, fire-sale robusto, contrafactuals coherentes, merge defensivo con cartera y schema estable.
 # ============================================================
+
 """
 MEJORAS CLAVE (bank-ready):
 - Export estable: enforce_schema() SIEMPRE antes de Excel/CSV.
@@ -378,6 +379,73 @@ def _pick_default_macro_model() -> Optional[str]:
         os.path.join(MODELS_DIR, "best_model_portfolio.zip"),
         os.path.join(MODELS_DIR, "best_model_macro.zip"),
     ):
+        if os.path.exists(p):
+            return p
+    return None
+
+
+# ---- Posture-aware model selection (best_model_{micro|macro}_<posture>.zip) --
+# Acepta aliases: "prudencial" (coordinator) == "prudente" (train_subagents).
+_POSTURE_ALIAS = {
+    "prudencial": "prudente",
+    "prudente": "prudente",
+    "balanceado": "balanceado",
+    "balanced": "balanceado",
+    "desinversion": "desinversion",
+    "desinv": "desinversion",
+}
+
+
+def _resolve_posture_suffix(risk_posture: Optional[str]) -> str:
+    rp = (risk_posture or "balanceado").lower().strip()
+    return _POSTURE_ALIAS.get(rp, "balanceado")
+
+
+def _pick_model_for_posture(kind: str, risk_posture: Optional[str]) -> Optional[str]:
+    """kind: 'micro' (loan) | 'macro' (portfolio). Intenta posture-suffixed, fallback a legacy."""
+    suf = _resolve_posture_suffix(risk_posture)
+    candidates = []
+    if kind == "micro":
+        candidates = [
+            os.path.join(MODELS_DIR, f"best_model_loan_{suf}.zip"),
+            os.path.join(MODELS_DIR, f"best_model_micro_{suf}.zip"),
+            os.path.join(MODELS_DIR, "best_model_loan.zip"),
+            os.path.join(MODELS_DIR, "best_model_micro.zip"),
+            os.path.join(MODELS_DIR, "best_model.zip"),
+        ]
+    elif kind == "macro":
+        candidates = [
+            os.path.join(MODELS_DIR, f"best_model_portfolio_{suf}.zip"),
+            os.path.join(MODELS_DIR, f"best_model_macro_{suf}.zip"),
+            os.path.join(MODELS_DIR, "best_model_portfolio.zip"),
+            os.path.join(MODELS_DIR, "best_model_macro.zip"),
+        ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _pick_vecnorm_for_posture(kind: str, risk_posture: Optional[str]) -> Optional[str]:
+    """kind: 'micro'|'macro'. Posture-suffixed VN con fallback legacy."""
+    suf = _resolve_posture_suffix(risk_posture)
+    candidates = []
+    if kind == "micro":
+        candidates = [
+            os.path.join(MODELS_DIR, f"vecnormalize_loan_{suf}.pkl"),
+            os.path.join(MODELS_DIR, f"vecnormalize_micro_{suf}.pkl"),
+            os.path.join(MODELS_DIR, "vecnormalize_loan.pkl"),
+            os.path.join(MODELS_DIR, "vecnormalize_micro.pkl"),
+            os.path.join(MODELS_DIR, "vecnormalize_final.pkl"),
+        ]
+    elif kind == "macro":
+        candidates = [
+            os.path.join(MODELS_DIR, f"vecnormalize_portfolio_{suf}.pkl"),
+            os.path.join(MODELS_DIR, f"vecnormalize_macro_{suf}.pkl"),
+            os.path.join(MODELS_DIR, "vecnormalize_portfolio.pkl"),
+            os.path.join(MODELS_DIR, "vecnormalize_macro.pkl"),
+        ]
+    for p in candidates:
         if os.path.exists(p):
             return p
     return None
@@ -987,6 +1055,184 @@ def compute_portfolio_kpis(df: pd.DataFrame, action_col: str = "Accion_final", c
         "hhi_concentration": hhi_score,
         "_meta": meta_info
     }
+
+
+# ===========================================================
+# PRUDENCIAL CARVE-OUT (post-processing helper)
+# Evita parálisis del 100% MANTENER en postura prudencial:
+# Permite REESTRUCTURAR cuando hay uplift claro + viabilidad holgada.
+# Se llama en _combine_decisions() DESPUÉS de los gates de capacidad/volumen
+# y ANTES de los hard guardrails (que validarán las nuevas reestructuras).
+# ===========================================================
+_PRUDENCIAL_CARVE_OUT_PARAMS = {
+    "eva_gain_top_pct":   0.20,    # top 20% del ΔEVA del portfolio de MANTENER
+    "min_eva_gain_abs":   15_000,  # ΔEVA mínimo absoluto (anti-trivial)
+    "dscr_buffer":        0.20,    # DSCR_post_proxy >= dscr_min + 0.20 → >= 1.30
+    "pti_max":            0.35,    # PTI <= 35%
+    "quita_max":          0.03,    # banda estrecha prudencial
+    "tasa_min":           0.10,    # no por debajo del hurdle
+}
+
+
+def _apply_prudencial_carve_out(
+    df: pd.DataFrame,
+    risk_posture: str,
+    g: Dict[str, Any],
+) -> pd.DataFrame:
+    """
+    PRUDENCIAL CARVE-OUT: para la postura prudencial, identifica loans MANTENER
+    que tienen uplift claro (ΔEVA top 20%) y viabilidad holgada (DSCR >> umbral,
+    PTI ok, concesiones en banda estrecha) y los eleva a REESTRUCTURAR.
+
+    Los loans elevados se marcan con:
+      - Accion_final            = "REESTRUCTURAR"
+      - Reason_Code             = "RC03_PRUDENCIAL_CARVEOUT_RESTRUCT"
+      - override_level          = "PRUDENCIAL_CARVEOUT"
+      - restruct_viable         = True   (para que hard guardrails los validen limpiamente)
+      - Decision_Governance     actualizado con nota del carve-out
+    """
+    rp_l = str(risk_posture or "balanceado").strip().lower()
+    if rp_l != "prudencial":
+        return df
+
+    params  = _PRUDENCIAL_CARVE_OUT_PARAMS
+    dscr_floor_g = float(g.get("DSCR_MIN", 1.10))
+    dscr_clean_thr = dscr_floor_g + float(params["dscr_buffer"])   # ≥ 1.30
+
+    mantener_mask = df["Accion_final"].str.upper().str.strip() == "MANTENER"
+    if not mantener_mask.any():
+        logger.info("  [CARVE_OUT] Prudencial: sin prestamos MANTENER -> skip.")
+        return df
+
+    # ── EVA gain series
+    for col in ("ΔEVA", "EVA_gain", "delta_eva"):
+        if col in df.columns:
+            eva = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+            break
+    else:
+        if {"EVA_post", "EVA_pre"}.issubset(df.columns):
+            eva = (
+                pd.to_numeric(df["EVA_post"], errors="coerce")
+                - pd.to_numeric(df["EVA_pre"],  errors="coerce")
+            ).fillna(0.0)
+        else:
+            logger.warning("[CARVE_OUT] Sin columna EVA_gain/dEVA -> carve-out omitido.")
+            return df
+
+    eva_mantener = eva[mantener_mask]
+    top_pct      = float(params["eva_gain_top_pct"])
+    eva_q_thr    = float(np.quantile(eva_mantener, 1.0 - top_pct))
+    eva_q_thr    = max(eva_q_thr, float(params["min_eva_gain_abs"]))
+
+    # ── DSCR check por niveles (NPL-aware)
+    #   L1: DSCR_post disponible → exigir >= dscr_clean_thr (1.30 + 0.20 = 1.50)
+    #   L2: Solo DSCR_pre disponible → NPL en default tiene DSCR < 1 habitual
+    #       → exigir >= 0.65 (señal de flujo real) — carve-out marcado CANDIDATE
+    #   L3: Sin datos DSCR → confiar en señal EVA (check omitido)
+    _MIN_DSCR_PRE_SIGNAL = 0.65
+
+    dscr_post_s = pd.to_numeric(df.get("DSCR_post", pd.Series(np.nan, index=df.index)), errors="coerce")
+    dscr_pre_s  = pd.to_numeric(df.get("DSCR_pre",  df.get("DSCR",   pd.Series(np.nan, index=df.index))), errors="coerce")
+    has_dscr_post = dscr_post_s.notna()
+    has_dscr_pre  = dscr_pre_s.notna()
+
+    ok_dscr_l1 = has_dscr_post & (dscr_post_s >= dscr_clean_thr)
+    ok_dscr_l2 = has_dscr_pre & ~has_dscr_post & (dscr_pre_s >= _MIN_DSCR_PRE_SIGNAL)
+    ok_dscr_l3 = ~has_dscr_post & ~has_dscr_pre
+    ok_dscr    = ok_dscr_l1 | ok_dscr_l2 | ok_dscr_l3
+
+    dscr_proxy = dscr_post_s.combine_first(dscr_pre_s).fillna(0.0)  # para proxy fill
+
+    # ── PTI proxy
+    pti_post_s = pd.to_numeric(df.get("PTI_post", pd.Series(np.nan, index=df.index)), errors="coerce")
+    pti_pre_s  = pd.to_numeric(df.get("PTI_pre",  df.get("PTI",    pd.Series(np.nan, index=df.index))), errors="coerce")
+    pti_proxy  = pti_post_s.combine_first(pti_pre_s).fillna(0.0)  # 0.0 → siempre pasa pti_max
+
+    # ── Concessions (NaN → omite check)
+    quita_s = pd.to_numeric(df.get("quita",     pd.Series(np.nan, index=df.index)), errors="coerce")
+    tasa_s  = pd.to_numeric(df.get("tasa_nueva", pd.Series(np.nan, index=df.index)), errors="coerce")
+
+    ok_eva   = eva        >= eva_q_thr
+    ok_pti   = pti_proxy  <= float(params["pti_max"])
+    ok_quita = quita_s.isna() | (quita_s <= float(params["quita_max"]))
+    ok_tasa  = tasa_s.isna()  | (tasa_s  >= float(params["tasa_min"]))
+
+    carveout_mask = mantener_mask & ok_eva & ok_dscr & ok_pti & ok_quita & ok_tasa
+
+    co_l1 = carveout_mask & ok_dscr_l1
+    co_l2 = carveout_mask & ok_dscr_l2
+    co_l3 = carveout_mask & ok_dscr_l3
+    n_co  = int(carveout_mask.sum())
+
+    logger.info(
+        f"  [CARVE_OUT] PRUDENCIAL: {n_co}/{int(mantener_mask.sum())} MANTENER "
+        f"identificados como carve-out "
+        f"(L1={int(co_l1.sum())} DSCR_post>={dscr_clean_thr:.2f}, "
+        f"L2={int(co_l2.sum())} DSCR_pre>=0.65, L3={int(co_l3.sum())} EVA-only | "
+        f"eva_q_thr={eva_q_thr:,.0f}€, PTI<={params['pti_max']:.0%})"
+    )
+
+    if n_co == 0:
+        return df
+
+    df = df.copy()
+    df.loc[carveout_mask, "Accion_final"] = "REESTRUCTURAR"
+
+    # Mirror action columns
+    for mirror in ("Accion", "decision_final", "Decision_Final", "Final_Decision"):
+        if mirror in df.columns:
+            df.loc[carveout_mask, mirror] = "REESTRUCTURAR"
+
+    # Populate DSCR_post / PTI_post with proxy values if missing
+    # (so hard guardrails later can see valid values)
+    if "DSCR_post" not in df.columns:
+        df["DSCR_post"] = np.nan
+    dscr_post_col = pd.to_numeric(df["DSCR_post"], errors="coerce")
+    still_nan_dscr = carveout_mask & dscr_post_col.isna()
+    if still_nan_dscr.any():
+        df.loc[still_nan_dscr, "DSCR_post"] = dscr_proxy[still_nan_dscr]
+
+    if "PTI_post" not in df.columns:
+        df["PTI_post"] = np.nan
+    pti_post_col = pd.to_numeric(df["PTI_post"], errors="coerce")
+    still_nan_pti = carveout_mask & pti_post_col.isna()
+    if still_nan_pti.any():
+        df.loc[still_nan_pti, "PTI_post"] = pti_proxy[still_nan_pti]
+
+    # Marcar como viable para que los hard guardrails validen correctamente
+    df.loc[carveout_mask, "restruct_viable"] = True
+
+    # Override log columns
+    df.loc[carveout_mask, "override_level"] = "PRUDENCIAL_CARVEOUT"
+    df.loc[carveout_mask, "override_from"]  = "MANTENER"
+    df.loc[carveout_mask, "override_to"]    = "REESTRUCTURAR"
+    df.loc[carveout_mask, "override_applied"] = True
+
+    # Reason Code — nivel-aware
+    if "Reason_Code" in df.columns:
+        if co_l1.any():
+            df.loc[co_l1, "Reason_Code"] = "RC03_PRUDENCIAL_CARVEOUT_CLEAN"
+        if co_l2.any():
+            df.loc[co_l2, "Reason_Code"] = "RC03_PRUDENCIAL_CARVEOUT_CANDIDATE"
+        if co_l3.any():
+            df.loc[co_l3, "Reason_Code"] = "RC03_PRUDENCIAL_CARVEOUT_EVA_SIGNAL"
+
+    # Governance note
+    gov_col = "Decision_Governance"
+    if gov_col in df.columns:
+        existing = df.loc[carveout_mask, gov_col].fillna("").astype(str)
+        df.loc[carveout_mask, gov_col] = (
+            existing
+            + f" | PRUDENCIAL_CARVEOUT(top{int(top_pct*100)}%_EVA"
+            + f"+DSCR>={dscr_clean_thr:.2f}+PTI<={params['pti_max']:.0%})"
+            + " -> REESTRUCTURAR"
+        )
+
+    # execution_status update
+    if "execution_status" in df.columns:
+        df.loc[carveout_mask, "execution_status"] = "PRUDENCIAL_CARVEOUT"
+
+    return df
 
 
 # ===========================================================
@@ -2238,10 +2484,43 @@ def _combine_decisions(
     for action, count in action_dist_final.items():
         logger.info(f"   {action}: {count} ({count/len(df)*100:.1f}%)")
 
+    # -----------------------------------------------------------
+    # 7.5) PRUDENCIAL CARVE-OUT (antes de hard guardrails)
+    # Eleva MANTENER -> REESTRUCTURAR para prestamos con uplift claro y
+    # viabilidad holgada. Los hard guardrails validarán estas reestructuras.
+    # -----------------------------------------------------------
+    rp_co = (risk_posture or "balanceado").strip().lower()
+    if rp_co == "prudencial":
+        n_mantener_before = (df["Accion_final"] == "MANTENER").sum()
+        df = _apply_prudencial_carve_out(df, risk_posture, g)
+        n_mantener_after = (df["Accion_final"] == "MANTENER").sum()
+        n_carveouts = n_mantener_before - n_mantener_after
+        if n_carveouts > 0:
+            logger.info(
+                f"[CARVE_OUT] PRUDENCIAL: {n_carveouts} préstamos elevados "
+                f"MANTENER -> REESTRUCTURAR (carve-out viabilidad holgada)"
+            )
+
     # ===========================================================
     # HARD GUARDRAILS (Centralized via optimizer/guardrails.py)
     # ===========================================================
     logger.info("[GUARD] Aplicando guardrails centralizados (Check Hard Constraints)...")
+
+    # Pre-initialize audit columns with proper dtypes to avoid FutureWarning
+    for _bool_col in ("restructure_ok", "sell_ok", "override_applied"):
+        if _bool_col in df.columns:
+            df[_bool_col] = df[_bool_col].astype(object)
+        else:
+            df[_bool_col] = pd.Series(dtype="object", index=df.index)
+    for _str_col in ("guardrail_reasons", "override_from", "override_to"):
+        if _str_col in df.columns:
+            df[_str_col] = df[_str_col].astype(object)
+        else:
+            df[_str_col] = pd.Series(dtype="object", index=df.index)
+    for _num_col in ("pti_limit", "dscr_limit", "pti_headroom", "dscr_headroom",
+                      "rwa_before", "rwa_after", "capital_release_net", "audit_price_book_ratio"):
+        if _num_col not in df.columns:
+            df[_num_col] = np.nan
 
     def _set_action_all(mask: pd.Series, action: str) -> None:
         """Set de acción en TODAS las columnas espejo que puedan existir."""
@@ -2259,17 +2538,21 @@ def _combine_decisions(
     g_params = _get_guardrails(risk_posture)
     
     class GuardrailConfig:
-        def __init__(self, params):
+        def __init__(self, params, posture_name):
+            self._posture = posture_name
             self.risk_params = type("RiskParams", (), {
                 "pti_limit": params.get("PTI_MAX", 0.45),
-                "dscr_min": params.get("DSCR_MIN", 1.10)
+                "dscr_min": params.get("DSCR_MIN", 1.10),
+                "pnl_max_loss_pct_ead": {
+                    "prudencial": 0.40, "balanceado": 0.60, "desinversion": 0.85
+                }.get(posture_name.lower(), 0.50),
             })
             self.fire_sale = type("FireSaleParams", (), {
                 "threshold_book": params.get("MAX_FIRE_SALE_PNL_RATIO_BOOK", 0.20),
-                "allow_fire_sale": risk_posture.lower() != "prudencial" # Solo no prudencial permite fire sale agresivo (simplificado)
+                "allow_fire_sale": posture_name.lower() != "prudencial"
             })
     
-    cfg_gr = GuardrailConfig(g_params)
+    cfg_gr = GuardrailConfig(g_params, risk_posture)
 
     # Iterar y aplicar
     n_blocked_restruct = 0
@@ -2734,12 +3017,25 @@ def run_coordinator_inference_multi_posture(cfg_base: CoordinatorInferenceConfig
         posture_base = os.path.join(run_base_dir, posture)
         os.makedirs(posture_base, exist_ok=True)
 
-        out_dir, excel_path = run_coordinator_inference(
-            model_micro=cfg_base.model_path_micro,
-            portfolio_path=cfg_base.portfolio_path,
-            vecnorm_micro_path=cfg_base.vecnormalize_path_micro,
+        # -- Posture-aware model/VN resolution: prioriza best_model_{loan|portfolio}_<posture>.zip
+        # y vecnormalize_{loan|portfolio}_<posture>.pkl; fallback al modelo pasado en cfg_base.
+        micro_model_p = _pick_model_for_posture("micro", posture) or cfg_base.model_path_micro
+        macro_model_p = _pick_model_for_posture("macro", posture) or cfg_base.model_path_macro
+        micro_vn_p = _pick_vecnorm_for_posture("micro", posture) or cfg_base.vecnormalize_path_micro
+        macro_vn_p = _pick_vecnorm_for_posture("macro", posture) or cfg_base.vecnormalize_path_macro
+        loan_vn_p = _pick_vecnorm_for_posture("micro", posture) or cfg_base.vecnormalize_path_loan
 
-            model_macro=cfg_base.model_path_macro,
+        logger.info(
+            f"  [POSTURE={posture}] micro_model={os.path.basename(micro_model_p) if micro_model_p else 'N/A'} | "
+            f"macro_model={os.path.basename(macro_model_p) if macro_model_p else 'N/A'}"
+        )
+
+        out_dir, excel_path = run_coordinator_inference(
+            model_micro=micro_model_p,
+            portfolio_path=cfg_base.portfolio_path,
+            vecnorm_micro_path=micro_vn_p,
+
+            model_macro=macro_model_p,
             risk_posture=posture,
 
             n_steps=int(cfg_base.n_steps),
@@ -2754,8 +3050,8 @@ def run_coordinator_inference_multi_posture(cfg_base: CoordinatorInferenceConfig
 
             export_audit_csv=bool(cfg_base.export_audit_csv),
 
-            vecnorm_macro_path=cfg_base.vecnormalize_path_macro,
-            vecnorm_loan_path=cfg_base.vecnormalize_path_loan,
+            vecnorm_macro_path=macro_vn_p,
+            vecnorm_loan_path=loan_vn_p,
         )
 
         outputs.append(out_dir)
@@ -2891,11 +3187,47 @@ def main():
         outs = run_coordinator_inference_multi_posture(cfg_base)
         logger.info(f"[COMPLETED] Multi-postura completado. Outputs: {outs}")
     else:
+        # Single-posture: si existe best_model_{loan|portfolio}_<risk_posture>.zip, lo
+        # preferimos frente al --model-micro/--model-macro legacy (no-suffixed). Si el
+        # usuario YA pasa un modelo posture-suffixed, respetamos su eleccion.
+        rp = args.risk_posture
+        suf = _resolve_posture_suffix(rp)
+
+        def _is_posture_suffixed(path: Optional[str], keyword: str) -> bool:
+            if not path:
+                return False
+            b = os.path.basename(path).lower()
+            return f"{keyword}_{suf}" in b
+
+        micro_model_auto = _pick_model_for_posture("micro", rp)
+        macro_model_auto = _pick_model_for_posture("macro", rp)
+        micro_vn_auto = _pick_vecnorm_for_posture("micro", rp)
+        macro_vn_auto = _pick_vecnorm_for_posture("macro", rp)
+
+        user_micro = args.model_micro if (args.model_micro and os.path.exists(args.model_micro)) else None
+        user_macro = args.model_macro if (args.model_macro and os.path.exists(args.model_macro)) else None
+        user_vn_micro = args.vn_micro if (args.vn_micro and os.path.exists(args.vn_micro)) else None
+        user_vn_macro = args.vn_macro if (args.vn_macro and os.path.exists(args.vn_macro)) else None
+        user_vn_loan = args.vn_loan if (args.vn_loan and os.path.exists(args.vn_loan)) else None
+
+        # Si el user YA pasa un modelo posture-suffixed, respetamos. Si no (legacy),
+        # upgrade automatico al posture-suffixed si existe.
+        eff_micro = user_micro if _is_posture_suffixed(user_micro, "loan") or _is_posture_suffixed(user_micro, "micro") else (micro_model_auto or user_micro)
+        eff_macro = user_macro if _is_posture_suffixed(user_macro, "portfolio") or _is_posture_suffixed(user_macro, "macro") else (macro_model_auto or user_macro)
+        eff_vn_micro = user_vn_micro if _is_posture_suffixed(user_vn_micro, "loan") or _is_posture_suffixed(user_vn_micro, "micro") else (micro_vn_auto or user_vn_micro)
+        eff_vn_macro = user_vn_macro if _is_posture_suffixed(user_vn_macro, "portfolio") or _is_posture_suffixed(user_vn_macro, "macro") else (macro_vn_auto or user_vn_macro)
+        eff_vn_loan = user_vn_loan if _is_posture_suffixed(user_vn_loan, "loan") or _is_posture_suffixed(user_vn_loan, "micro") else (micro_vn_auto or user_vn_loan)
+
+        if eff_micro and eff_micro != args.model_micro:
+            logger.info(f"[POSTURE] upgrade MICRO -> {os.path.basename(eff_micro)} (posture={rp})")
+        if eff_macro and eff_macro != args.model_macro:
+            logger.info(f"[POSTURE] upgrade MACRO -> {os.path.basename(eff_macro)} (posture={rp})")
+
         out_dir, excel_path = run_coordinator_inference(
-            model_micro=args.model_micro,
+            model_micro=eff_micro,
             portfolio_path=args.portfolio,
-            vecnorm_micro_path=args.vn_micro if (args.vn_micro and os.path.exists(args.vn_micro)) else None,
-            model_macro=args.model_macro if (args.model_macro and os.path.exists(args.model_macro)) else None,
+            vecnorm_micro_path=eff_vn_micro,
+            model_macro=eff_macro,
             risk_posture=args.risk_posture,
             n_steps=args.n_steps,
             top_k=args.top_k,
@@ -2905,8 +3237,8 @@ def main():
             seed=args.seed,
             deterministic=bool(args.deterministic),
             export_audit_csv=bool(args.export_audit_csv),
-            vecnorm_macro_path=args.vn_macro if (args.vn_macro and os.path.exists(args.vn_macro)) else None,
-            vecnorm_loan_path=args.vn_loan if (args.vn_loan and os.path.exists(args.vn_loan)) else None,
+            vecnorm_macro_path=eff_vn_macro,
+            vecnorm_loan_path=eff_vn_loan,
         )
         logger.info(f"[COMPLETED] Inferencia coordinada completada. Carpeta: {out_dir}")
         logger.info(f"[EXCEL] Excel final: {excel_path}")

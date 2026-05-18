@@ -1,0 +1,55 @@
+{
+  "loan": {
+    "agent": "loan",
+    "n_episodes": 50,
+    "mean_reward": -151.26432442814112,
+    "std_reward": 88.79665210807299,
+    "min_reward": -421.97758197784424,
+    "max_reward": -39.09631496667862,
+    "mean_length": 50.0,
+    "random_baseline": -369.9744567796588,
+    "improvement_vs_random": 218.71013235151767,
+    "improvement_pct": 59.1149276237122,
+    "action_distribution": {
+      "0": 1977,
+      "1": 18,
+      "2": 505
+    },
+    "entropy_ratio": 0.49537745737922617,
+    "dominant_action": 0,
+    "dominant_pct": 79.08
+  },
+  "portfolio": {
+    "agent": "portfolio",
+    "n_episodes": 20,
+    "mean_reward": -48.54428459405899,
+    "std_reward": 0.8092226201280889,
+    "min_reward": -52.06840658187866,
+    "max_reward": -48.28610897064209,
+    "random_baseline": -161.10997490286826,
+    "hold_baseline": -300.0,
+    "improvement_vs_random": 112.56569030880927,
+    "improvement_vs_random_pct": 69.86885224001438,
+    "improvement_vs_hold": 251.45571540594102,
+    "improvement_vs_hold_pct": 83.81857180198034,
+    "action_distribution": {
+      "1": 1,
+      "3": 120,
+      "4": 159,
+      "5": 49,
+      "6": 29,
+      "7": 100,
+      "8": 142
+    },
+    "entropy_ratio": 0.6741418777575868,
+    "dominant_action": 4,
+    "dominant_pct": 26.5
+  },
+  "summary": {
+    "loan_reward": -151.26432442814112,
+    "loan_vs_random_pct": 59.1149276237122,
+    "portfolio_reward": -48.54428459405899,
+    "portfolio_vs_random_pct": 69.86885224001438,
+    "portfolio_vs_hold_pct": 83.81857180198034
+  }
+}

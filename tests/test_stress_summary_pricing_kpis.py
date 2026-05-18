@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+# ============================================================
+# tests/test_stress_summary_pricing_kpis.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Test del resumen de KPIs de pricing tras stress.
+# ============================================================
 """
 tests/test_stress_summary_pricing_kpis.py
 

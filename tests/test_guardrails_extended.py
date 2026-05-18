@@ -1,4 +1,10 @@
+# -*- coding: utf-8 -*-
+# ============================================================
 # tests/test_guardrails_extended.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Tests extendidos de guardrails (override de umbrales por config).
+# ============================================================
+
 import pytest
 from unittest.mock import MagicMock
 from optimizer.guardrails import check_restructure_constraints, check_sell_constraints

@@ -1,8 +1,10 @@
 # -*- coding: utf-8 -*-
-# ============================================
-# agent/train_agent.py — Entrenamiento PPO (LoanEnv + PortfolioEnv)
-# (AUDIT-READY · STD · NPL) — v1.2 hardened (VN split micro/macro)
-# ============================================
+# ============================================================
+# agent/train_agent.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Entrenamiento PPO genérico (LoanEnv o PortfolioEnv) con early stopping, VecNormalize, TensorBoard y checkpoints; artefactos separados por tipo de entorno.
+# ============================================================
+
 """
 Entrenamiento del agente PPO sobre LoanEnv o PortfolioEnv.
 

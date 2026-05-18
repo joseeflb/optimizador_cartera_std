@@ -1,22 +1,9 @@
 # -*- coding: utf-8 -*-
-# ============================================
-# config.py — versión Banco L1.5 (CORREGIDO y armonizado)
-# ============================================
-# OPTIMIZADOR DE CARTERAS EN DEFAULT (Método Estándar · Basilea III)
-#
-# Coherente con:
-#   [OK] LoanEnv (micro)
-#   [OK] PortfolioEnv (macro)
-#   [OK] restructure_optimizer
-#   [OK] price_simulator
-#   [OK] policy_inference y train_agent
-#   [OK] arquitectura multi-agente
-#
-# Nota crítica (NPL):
-#   - DEFAULT es un ESTADO (trigger regulatorio y operativo).
-#   - PD NO es 100% por estar en default. PD se interpreta como PD forward 12–24m.
-#   - El severidad de default se captura con DPD, LGD, colateral, pricing y RW (STD).
-# ============================================
+# ============================================================
+# config.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Configuración global del proyecto: parámetros financieros y regulatorios (Basilea III STD), hiperparámetros PPO, posturas (PRUDENCIAL/BALANCEADO/DESINVERSION), guardrails, fire-sale, rutas y logging.
+# ============================================================
 
 from __future__ import annotations
 from dataclasses import dataclass, field
@@ -346,6 +333,8 @@ class BankStrategy:
     penalty_mode_collapse: float
     sell_bonus_eva_neg: float
     maintain_bonus_eva_pos: float
+    restruct_bonus_eva_gain: float  # bonus por reestructuración exitosa (EVA gain > 0)
+    sell_risk_bonus: float  # bonus por vender alto riesgo (PD alta) — corrige inversión rating-sell
 
     restructure_admin_cost_abs: float
     restructure_cost_quita_bps: int
@@ -379,23 +368,33 @@ class BankStrategy:
     recovery_min_pct: float  # recovery mínimo (sale_price/EAD) para venta voluntaria (gate 2)
     max_sell_share: float  # % máximo de cartera a vender (aplica SOLO a VOLUNTARIAS, mandatos exentos)
 
+    # [U1F195] FAMILY BONUSES MACRO (PortfolioEnv) - reward shaping por familia de acción
+    # Aplican como término ADITIVO (no condicionado a EVA) para diferenciar posturas en macro.
+    # Familias macro: MAINTAIN={0,11}, SELL={1,2,6,7,8}, RESTRUCT={3,4,5}, MIX={9,10}.
+    macro_bonus_maintain: float = 0.0
+    macro_bonus_restruct: float = 0.0
+    macro_bonus_mix: float = 0.0
+    macro_penalty_sell: float = 0.0
+
 BANK_STRATEGIES: Dict[BankProfile, BankStrategy] = {
     BankProfile.PRUDENTE: BankStrategy(
         name="Banco prudente",
         w_eva=0.25,
-        w_capital=0.30,
+        w_capital=0.18,
         w_stab=0.15,
         w_diversif=0.05,
-        w_pnl=0.25,
+        w_pnl=0.10,
         pnl_penalty_scale=1.5e5,
         pnl_weight=1.0,
         w_vol=0.04,
         w_concentration=0.08,
         w_cap_carry=0.03,
-        penalty_fire_sale=0.85,
+        penalty_fire_sale=2.20,
         penalty_mode_collapse=0.10,
-        sell_bonus_eva_neg=0.10,
-        maintain_bonus_eva_pos=0.35,
+        sell_bonus_eva_neg=0.03,
+        maintain_bonus_eva_pos=1.30,
+        restruct_bonus_eva_gain=0.85,
+        sell_risk_bonus=0.05,
         restructure_admin_cost_abs=250.0,
         restructure_cost_quita_bps=40,
         sell_tx_cost_bps=100,
@@ -419,6 +418,12 @@ BANK_STRATEGIES: Dict[BankProfile, BankStrategy] = {
         # [U1F195] NPL BANK-GRADE - Disciplina económica (recovery + capacity)
         recovery_min_pct=0.15,  # recovery >= 15% EAD para venta voluntaria (exigente)
         max_sell_share=0.40,  # cap 40% ventas VOLUNTARIAS (conservador) [PC7 SECOND PASS]
+        # [U1F195] FAMILY BONUSES MACRO - PRUDENTE prefiere MANTENER, evita VENDER
+        # v2: subidos para forzar MAINTAIN dominante (v1 cayo en REESTRUCT por reward economico dominante)
+        macro_bonus_maintain=6.00,
+        macro_bonus_restruct=0.20,
+        macro_bonus_mix=0.30,
+        macro_penalty_sell=4.00,
     ),
     BankProfile.BALANCEADO: BankStrategy(
         name="Banco balanceado",
@@ -426,16 +431,18 @@ BANK_STRATEGIES: Dict[BankProfile, BankStrategy] = {
         w_capital=0.45,
         w_stab=0.12,
         w_diversif=0.05,
-        w_pnl=0.30,
+        w_pnl=0.20,
         pnl_penalty_scale=9e4,
         pnl_weight=1.0,
         w_vol=0.03,
         w_concentration=0.06,
         w_cap_carry=0.07,
-        penalty_fire_sale=0.55,
+        penalty_fire_sale=1.20,
         penalty_mode_collapse=0.08,
-        sell_bonus_eva_neg=0.45,
-        maintain_bonus_eva_pos=0.20,
+        sell_bonus_eva_neg=0.28,
+        maintain_bonus_eva_pos=0.60,
+        restruct_bonus_eva_gain=0.65,
+        sell_risk_bonus=0.20,
         restructure_admin_cost_abs=250.0,
         restructure_cost_quita_bps=40,
         sell_tx_cost_bps=80,
@@ -457,8 +464,18 @@ BANK_STRATEGIES: Dict[BankProfile, BankStrategy] = {
         mandate_w_recovery=2.5,  # recovery bajo altamente penalizado
         mandate_loss_tolerance=0.94,  # con mandato acepta 94% loss (vs 90% voluntario)
         # [U1F195] NPL BANK-GRADE - Disciplina económica (recovery + capacity)
-        recovery_min_pct=0.10,  # recovery >= 10% EAD para venta voluntaria (vs 15% PRUD)
+        # [PC8] recovery_min_pct relajado 0.10 -> 0.08 para desbloquear SELL voluntarias en eval pool
+        # (Price/EAD típico 0.08-0.14). Mantiene jerarquía PRU(0.15) > BAL(0.08) > DES(0.06).
+        recovery_min_pct=0.08,  # recovery >= 8% EAD para venta voluntaria (vs 15% PRUD, 6% DES)
         max_sell_share=0.60,  # cap 60% ventas VOLUNTARIAS (equilibrado) [PC7 SECOND PASS]
+        # [U1F195] FAMILY BONUSES MACRO - BALANCEADO favorece MIX/RESTR (ambos ejecutan);
+        # los SELL puros se bloquean por gates en PortfolioEnv (max_sell_share=0.60,
+        # recovery_min_pct=0.10) y degradaban la cartera sin liberar capital.
+        # Subidos tras eval ML-standard: BAL debe quedar entre PRU (RESTR puro) y DES (SELL puro).
+        macro_bonus_maintain=0.30,
+        macro_bonus_restruct=1.50,
+        macro_bonus_mix=4.00,
+        macro_penalty_sell=1.20,
     ),
     BankProfile.DESINVERSION: BankStrategy(
         name="Plan de desinversión NPL",
@@ -476,6 +493,8 @@ BANK_STRATEGIES: Dict[BankProfile, BankStrategy] = {
         penalty_mode_collapse=0.06,
         sell_bonus_eva_neg=0.85,
         maintain_bonus_eva_pos=0.5,
+        restruct_bonus_eva_gain=0.20,
+        sell_risk_bonus=0.15,
         restructure_admin_cost_abs=250.0,
         restructure_cost_quita_bps=40,
         sell_tx_cost_bps=70,
@@ -499,6 +518,11 @@ BANK_STRATEGIES: Dict[BankProfile, BankStrategy] = {
         # [U1F195] NPL BANK-GRADE - Disciplina económica (recovery + capacity)
         recovery_min_pct=0.06,  # recovery >= 6% EAD para venta voluntaria (mínimo razonable)
         max_sell_share=0.70,  # cap 70% ventas VOLUNTARIAS (mandatos exentos) [PC7 SECOND PASS]
+        # [U1F195] FAMILY BONUSES MACRO - DESINVERSION premia VENDER, penaliza MANTENER
+        macro_bonus_maintain=-0.30,
+        macro_bonus_restruct=0.10,
+        macro_bonus_mix=0.60,
+        macro_penalty_sell=-1.50,  # negativo = bonus a VENDER
     ),
 }
 
@@ -535,14 +559,16 @@ class RewardParams:
     penalty_mode_collapse: float = 0.10
     sell_bonus_eva_neg: float = 0.20
     maintain_bonus_eva_pos: float = 0.25
+    restruct_bonus_eva_gain: float = 0.30  # bonus reestructuración con EVA gain
+    sell_risk_bonus: float = 0.20  # bonus venta de alto riesgo (PD alta)
 
     # Costes explícitos
     restructure_admin_cost_abs: float = 250.0
     restructure_cost_quita_bps: int = 40
     sell_tx_cost_bps: int = 100
 
-    # Clipping global
-    clip: Tuple[float, float] = (-1e6, 1e6)
+    # Clipping global (rango normalizado, coherente con PortfolioEnv)
+    clip: Tuple[float, float] = (-10.0, 10.0)
 
     @classmethod
     def from_strategy(cls, strat: BankStrategy) -> "RewardParams":
@@ -562,6 +588,8 @@ class RewardParams:
             penalty_mode_collapse=strat.penalty_mode_collapse,
             sell_bonus_eva_neg=strat.sell_bonus_eva_neg,
             maintain_bonus_eva_pos=strat.maintain_bonus_eva_pos,
+            restruct_bonus_eva_gain=strat.restruct_bonus_eva_gain,
+            sell_risk_bonus=strat.sell_risk_bonus,
             restructure_admin_cost_abs=strat.restructure_admin_cost_abs,
             restructure_cost_quita_bps=strat.restructure_cost_quita_bps,
             sell_tx_cost_bps=strat.sell_tx_cost_bps,
@@ -573,19 +601,19 @@ class RewardParams:
 @dataclass
 class PPOParams:
     policy: str = "MlpPolicy"
-    learning_rate: float = 3e-4
-    n_steps: int = 2048
-    batch_size: int = 64
-    n_epochs: int = 10
-    gamma: float = 0.99
+    learning_rate: float = 1e-4
+    n_steps: int = 4096
+    batch_size: int = 128
+    n_epochs: int = 5
+    gamma: float = 0.995
     gae_lambda: float = 0.95
     clip_range: float = 0.2
-    ent_coef: float = 0.0
+    ent_coef: float = 0.02
     vf_coef: float = 0.5
     max_grad_norm: float = 0.5
     total_timesteps: int = 500_000
     seed: int = GLOBAL_SEED
-    policy_kwargs: Dict[str, Any] = field(default_factory=lambda: {"net_arch": [128, 128]})
+    policy_kwargs: Dict[str, Any] = field(default_factory=lambda: {"net_arch": [256, 256]})
     tensorboard_log: str = str((LOGS_DIR / "tb").as_posix())
 
 # ================================================================
@@ -650,6 +678,7 @@ class ProjectConfig:
         "normalize_obs_portfolio": True,
         "max_steps_portfolio": 30,
         "portfolio_eva_vol_window": 8,
+        "portfolio_log_step_details": False,
     })
 
     def validate(self):

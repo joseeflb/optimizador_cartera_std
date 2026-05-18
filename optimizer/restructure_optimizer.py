@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-# ============================================
-# optimizer/restructure_optimizer.py — Optimizador híbrido (local + global)
-# v2.3.1 (FIXED · Quita = write-off real contra BOOK_VALUE · Outputs auditables)
-# ============================================
+# ============================================================
+# optimizer/restructure_optimizer.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Optimizador híbrido (local + global) de reestructuración: rejilla plazo × tipo × quita, write-off contra BOOK_VALUE y outputs auditables.
+# ============================================================
 
 from __future__ import annotations
 

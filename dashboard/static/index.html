@@ -1,0 +1,899 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>NPL Portfolio Optimizer — Lovable Matrix Dashboard</title>
+<style>
+/* ── EY Design System ─────────────────────────────────────────── */
+:root {
+  --ey-yellow: #FFE600;
+  --ey-black: #000000;
+  --ey-dark: #1A1A1A;
+  --ey-dark2: #2E2E2E;
+  --ey-gray: #666666;
+  --ey-light-gray: #3A3A3A;
+  --ey-white: #FFFFFF;
+  --ey-red: #FF4A4A;
+  --ey-green: #4ADE80;
+  --ey-amber: #FBBF24;
+  --ey-blue: #60A5FA;
+  --font: 'Inter', 'Arial', 'Helvetica Neue', sans-serif;
+  --radius: 8px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: var(--font); background: var(--ey-dark);
+  color: var(--ey-white); min-height: 100vh;
+}
+a { color: var(--ey-yellow); text-decoration: none; }
+a:hover { text-decoration: underline; }
+
+/* ── Header ───────────────────────────────────────────────────── */
+.header {
+  background: var(--ey-black);
+  border-bottom: 3px solid var(--ey-yellow);
+  padding: 16px 32px; display: flex;
+  align-items: center; justify-content: space-between;
+}
+.header h1 {
+  font-size: 20px; font-weight: 700;
+  color: var(--ey-yellow); letter-spacing: 0.5px;
+}
+.header .tag-selector {
+  display: flex; align-items: center; gap: 12px;
+}
+.header select, .header button {
+  background: var(--ey-dark2); color: var(--ey-white);
+  border: 1px solid var(--ey-gray); border-radius: var(--radius);
+  padding: 6px 14px; font-size: 13px; cursor: pointer;
+}
+.header button {
+  background: var(--ey-yellow); color: var(--ey-black);
+  font-weight: 600; border: none;
+}
+.header button:hover { opacity: 0.85; }
+
+/* ── Navigation ───────────────────────────────────────────────── */
+.nav {
+  display: flex; gap: 0; background: var(--ey-dark2);
+  border-bottom: 1px solid var(--ey-light-gray);
+}
+.nav button {
+  flex: 1; padding: 12px 0; font-size: 13px; font-weight: 600;
+  color: var(--ey-gray); background: transparent; border: none;
+  cursor: pointer; border-bottom: 3px solid transparent;
+  transition: all 0.2s;
+}
+.nav button.active {
+  color: var(--ey-yellow); border-bottom-color: var(--ey-yellow);
+  background: rgba(255,230,0,0.05);
+}
+.nav button:hover:not(.active) { color: var(--ey-white); }
+
+/* ── Content ──────────────────────────────────────────────────── */
+.content { padding: 24px 32px; max-width: 1400px; margin: 0 auto; }
+.view { display: none; }
+.view.active { display: block; }
+
+/* ── Cards ────────────────────────────────────────────────────── */
+.card-grid {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 16px; margin-bottom: 24px;
+}
+.card {
+  background: var(--ey-dark2); border-radius: var(--radius);
+  padding: 20px; border-left: 4px solid var(--ey-yellow);
+}
+.card.red { border-left-color: var(--ey-red); }
+.card.green { border-left-color: var(--ey-green); }
+.card.blue { border-left-color: var(--ey-blue); }
+.card .card-label {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+  color: var(--ey-gray); margin-bottom: 6px;
+}
+.card .card-value {
+  font-size: 28px; font-weight: 700; color: var(--ey-white);
+}
+.card .card-sub {
+  font-size: 12px; color: var(--ey-gray); margin-top: 4px;
+}
+
+/* ── Posture Tabs ─────────────────────────────────────────────── */
+.posture-tabs {
+  display: flex; gap: 8px; margin-bottom: 20px;
+}
+.posture-tabs button {
+  padding: 8px 20px; border-radius: 20px; font-size: 13px;
+  font-weight: 600; border: 2px solid var(--ey-gray);
+  background: transparent; color: var(--ey-gray); cursor: pointer;
+}
+.posture-tabs button.active {
+  border-color: var(--ey-yellow); color: var(--ey-yellow);
+  background: rgba(255,230,0,0.1);
+}
+
+/* ── Tables ───────────────────────────────────────────────────── */
+.data-table-wrap { overflow-x: auto; margin-top: 12px; }
+table.data-table {
+  width: 100%; border-collapse: collapse; font-size: 12px;
+}
+table.data-table th {
+  background: var(--ey-black); color: var(--ey-yellow);
+  padding: 10px 12px; text-align: left; font-weight: 600;
+  position: sticky; top: 0; white-space: nowrap;
+}
+table.data-table td {
+  padding: 8px 12px; border-bottom: 1px solid var(--ey-light-gray);
+  white-space: nowrap;
+}
+table.data-table tr:hover { background: rgba(255,230,0,0.04); }
+.action-badge {
+  display: inline-block; padding: 2px 10px; border-radius: 12px;
+  font-size: 11px; font-weight: 700;
+}
+.action-MANTENER    { background: rgba(74,222,128,0.15); color: var(--ey-green); }
+.action-REESTRUCTURAR { background: rgba(251,191,36,0.15); color: var(--ey-amber); }
+.action-VENDER      { background: rgba(255,74,74,0.15); color: var(--ey-red); }
+
+/* ── Semaphore KPIs ───────────────────────────────────────────── */
+.semaphore { display: inline-block; width: 10px; height: 10px; border-radius: 50%; margin-right: 6px; }
+.semaphore.green  { background: var(--ey-green); }
+.semaphore.amber  { background: var(--ey-amber); }
+.semaphore.red    { background: var(--ey-red); }
+
+/* ── Charts (canvas) ──────────────────────────────────────────── */
+.chart-container {
+  background: var(--ey-dark2); border-radius: var(--radius);
+  padding: 20px; margin-bottom: 16px;
+}
+.chart-container h3 {
+  font-size: 14px; color: var(--ey-yellow); margin-bottom: 12px;
+}
+canvas { max-width: 100%; }
+
+/* ── Stress Matrix ────────────────────────────────────────────── */
+.stress-matrix {
+  display: grid; grid-template-columns: 120px repeat(3, 1fr);
+  gap: 2px; margin-top: 16px;
+}
+.stress-cell {
+  background: var(--ey-dark2); padding: 12px; text-align: center;
+  border-radius: 4px; font-size: 13px;
+}
+.stress-cell.header {
+  background: var(--ey-black); color: var(--ey-yellow);
+  font-weight: 700; font-size: 12px;
+}
+.stress-cell.scenario {
+  background: var(--ey-black); color: var(--ey-white);
+  font-weight: 600; text-align: right; padding-right: 16px;
+}
+
+/* ── Markdown ─────────────────────────────────────────────────── */
+.md-content {
+  background: var(--ey-dark2); border-radius: var(--radius);
+  padding: 24px; font-size: 13px; line-height: 1.7;
+  white-space: pre-wrap; font-family: 'Consolas', monospace;
+  max-height: 600px; overflow-y: auto;
+}
+
+/* ── What-If Panel ────────────────────────────────────────────── */
+.whatif-panel {
+  background: var(--ey-dark2); border-radius: var(--radius);
+  border: 2px solid var(--ey-yellow); padding: 24px; margin-top: 20px;
+}
+.whatif-panel h3 { color: var(--ey-yellow); margin-bottom: 12px; }
+.whatif-panel label { display: block; margin-top: 10px; font-size: 12px; color: var(--ey-gray); }
+.whatif-panel input, .whatif-panel select {
+  width: 100%; padding: 8px; margin-top: 4px;
+  background: var(--ey-dark); color: var(--ey-white);
+  border: 1px solid var(--ey-gray); border-radius: var(--radius);
+}
+
+/* ── Loading / Status ─────────────────────────────────────────── */
+.status-bar {
+  padding: 8px 32px; font-size: 12px; color: var(--ey-gray);
+  background: var(--ey-dark2); text-align: right;
+  border-top: 1px solid var(--ey-light-gray);
+}
+.loading { text-align: center; padding: 60px; color: var(--ey-gray); }
+
+/* ── Footer ───────────────────────────────────────────────────── */
+.footer {
+  background: var(--ey-black); border-top: 3px solid var(--ey-yellow);
+  padding: 12px 32px; text-align: center; font-size: 11px;
+  color: var(--ey-gray);
+}
+</style>
+</head>
+<body>
+
+<!-- ══════════ HEADER ══════════ -->
+<div class="header">
+  <h1>▎NPL Portfolio Optimizer — Lovable Matrix</h1>
+  <div class="tag-selector">
+    <span style="font-size:12px;color:var(--ey-gray)">Run tag:</span>
+    <select id="tagSelect"></select>
+    <button onclick="loadAll()">↻ Refresh</button>
+    <button onclick="showWhatIf()" style="background:var(--ey-dark2);color:var(--ey-yellow);border:1px solid var(--ey-yellow)">
+      ⚙ What-If
+    </button>
+  </div>
+</div>
+
+<!-- ══════════ NAV ══════════ -->
+<div class="nav">
+  <button class="active" onclick="showView('v1',this)">📊 KPI Executive</button>
+  <button onclick="showView('v2',this)">📋 Decision Detail</button>
+  <button onclick="showView('v3',this)">🔥 Stress Analysis</button>
+  <button onclick="showView('v4',this)">🗺 Portfolio Map</button>
+  <button onclick="showView('v5',this)">📝 Posture Analysis</button>
+</div>
+
+<!-- ══════════ CONTENT ══════════ -->
+<div class="content">
+
+  <!-- ── Vista 1: KPI Executive ── -->
+  <div id="v1" class="view active">
+    <div class="posture-tabs" id="postureTabs1"></div>
+    <div id="kpiCards" class="card-grid"></div>
+    <div class="card-grid">
+      <div class="chart-container">
+        <h3>Distribución de acciones por postura</h3>
+        <canvas id="chartActions" height="250"></canvas>
+      </div>
+      <div class="chart-container">
+        <h3>Capital liberado vs EVA (M€)</h3>
+        <canvas id="chartCapitalEva" height="250"></canvas>
+      </div>
+    </div>
+    <div class="chart-container">
+      <h3>Comparativa de KPIs: Pre-intervención vs Post-optimización</h3>
+      <canvas id="chartComparison" height="200"></canvas>
+    </div>
+  </div>
+
+  <!-- ── Vista 2: Decision Detail ── -->
+  <div id="v2" class="view">
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:16px;flex-wrap:wrap">
+      <div class="posture-tabs" id="postureTabs2" style="margin-bottom:0"></div>
+      <input id="filterSearch" placeholder="🔍  Filtrar por loan_id, segmento, rating…"
+             style="flex:1;min-width:200px;padding:8px 14px;background:var(--ey-dark2);color:var(--ey-white);
+                    border:1px solid var(--ey-gray);border-radius:var(--radius);font-size:13px"
+             oninput="filterTable()"/>
+      <select id="filterAction" onchange="filterTable()"
+              style="padding:8px;background:var(--ey-dark2);color:var(--ey-white);border:1px solid var(--ey-gray);border-radius:var(--radius)">
+        <option value="">Todas las acciones</option>
+        <option value="MANTENER">MANTENER</option>
+        <option value="REESTRUCTURAR">REESTRUCTURAR</option>
+        <option value="VENDER">VENDER</option>
+      </select>
+    </div>
+    <div id="decisionTable" class="data-table-wrap"></div>
+  </div>
+
+  <!-- ── Vista 3: Stress Analysis ── -->
+  <div id="v3" class="view">
+    <h2 style="color:var(--ey-yellow);font-size:16px;margin-bottom:16px">
+      Backtesting Dinámico Multi-Trimestre
+    </h2>
+    <div class="chart-container">
+      <h3>EVA total por trimestre y postura</h3>
+      <canvas id="chartBacktest" height="280"></canvas>
+    </div>
+    <div class="card-grid">
+      <div class="chart-container">
+        <h3>Curación acumulada</h3>
+        <canvas id="chartCured" height="200"></canvas>
+      </div>
+      <div class="chart-container">
+        <h3>Re-default acumulado</h3>
+        <canvas id="chartRedefault" height="200"></canvas>
+      </div>
+    </div>
+    <h2 style="color:var(--ey-yellow);font-size:16px;margin:24px 0 16px">
+      Matriz de Estrés (4 escenarios × 3 posturas)
+    </h2>
+    <div id="stressMatrix"></div>
+  </div>
+
+  <!-- ── Vista 4: Portfolio Map ── -->
+  <div id="v4" class="view">
+    <div class="posture-tabs" id="postureTabs4" style="margin-bottom:0"></div>
+    <div class="chart-container" style="margin-top:16px">
+      <h3>Scatter: EAD vs PD — coloreado por acción final</h3>
+      <canvas id="chartScatter" height="400"></canvas>
+    </div>
+    <div class="card-grid">
+      <div class="chart-container">
+        <h3>Distribución por segmento</h3>
+        <canvas id="chartSegment" height="250"></canvas>
+      </div>
+      <div class="chart-container">
+        <h3>Distribución por rating</h3>
+        <canvas id="chartRating" height="250"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Vista 5: Posture Analysis (MD) ── -->
+  <div id="v5" class="view">
+    <h2 style="color:var(--ey-yellow);font-size:16px;margin-bottom:16px">
+      NPL Workout Layer — Distance Checks & Negotiation Envelopes
+    </h2>
+    <div id="postureAnalysisMd" class="md-content">Cargando…</div>
+  </div>
+
+  <!-- ── What-If Panel (overlay) ── -->
+  <div id="whatifPanel" class="whatif-panel" style="display:none">
+    <h3>⚙ What-If Analysis — Lanzar nuevo run</h3>
+    <p style="font-size:12px;color:var(--ey-gray);margin-bottom:12px">
+      Modifica los parámetros y lanza un re-run del pipeline a través del webhook n8n.
+      Los resultados aparecerán en el dashboard en ~15 minutos.
+    </p>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+      <div>
+        <label>Nº préstamos</label>
+        <input id="wiLoans" type="number" value="500"/>
+      </div>
+      <div>
+        <label>Postura principal</label>
+        <select id="wiPosture">
+          <option value="all">Todas (3 posturas)</option>
+          <option value="prudencial">Solo Prudencial</option>
+          <option value="balanceado">Solo Balanceado</option>
+          <option value="desinversion">Solo Desinversión</option>
+        </select>
+      </div>
+      <div>
+        <label>Seed</label>
+        <input id="wiSeed" type="number" value="42"/>
+      </div>
+      <div>
+        <label>Steps loan agent</label>
+        <input id="wiStepsLoan" type="number" value="500000"/>
+      </div>
+      <div>
+        <label>Steps portfolio agent</label>
+        <input id="wiStepsPortfolio" type="number" value="200000"/>
+      </div>
+      <div>
+        <label>Quarters backtesting</label>
+        <input id="wiQuarters" type="number" value="8"/>
+      </div>
+    </div>
+    <div style="margin-top:16px;text-align:right">
+      <button onclick="hideWhatIf()" style="background:var(--ey-dark);color:var(--ey-white);border:1px solid var(--ey-gray);
+              border-radius:var(--radius);padding:8px 20px;cursor:pointer;margin-right:8px">Cancelar</button>
+      <button onclick="launchWhatIf()" style="background:var(--ey-yellow);color:var(--ey-black);border:none;
+              border-radius:var(--radius);padding:8px 24px;cursor:pointer;font-weight:700">🚀 Lanzar Run</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ STATUS BAR ══════════ -->
+<div class="status-bar" id="statusBar">
+  Dashboard listo · Conectado a API en localhost:3000
+</div>
+
+<!-- ══════════ FOOTER ══════════ -->
+<div class="footer">
+  NPL Portfolio Optimizer · Lovable Matrix Dashboard · EY Financial Services · 2026
+</div>
+
+<!-- ══════════ Chart.js CDN ══════════ -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+
+<script>
+// ═══════════════════════════════════════════════════════════════
+//  GLOBALS
+// ═══════════════════════════════════════════════════════════════
+const API = window.location.origin + '/api';
+let currentTag = '';
+let currentPosture = 'prudencial';
+let kpiData = {};
+let decisionData = {};
+let backtestData = [];
+let charts = {};
+
+const POSTURES = ['prudencial', 'balanceado', 'desinversion'];
+const POSTURE_LABELS = { prudencial:'Prudencial', balanceado:'Balanceado', desinversion:'Desinversión' };
+const COLORS = {
+  prudencial: '#60A5FA',
+  balanceado: '#FFE600',
+  desinversion: '#FF4A4A',
+  MANTENER: '#4ADE80',
+  REESTRUCTURAR: '#FBBF24',
+  VENDER: '#FF4A4A',
+};
+
+// ═══════════════════════════════════════════════════════════════
+//  INIT
+// ═══════════════════════════════════════════════════════════════
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadTags();
+  buildPostureTabs();
+  loadAll();
+});
+
+async function apiFetch(path) {
+  try {
+    const r = await fetch(API + path);
+    if (!r.ok) return null;
+    return await r.json();
+  } catch { return null; }
+}
+
+async function loadTags() {
+  const d = await apiFetch('/tags');
+  const sel = document.getElementById('tagSelect');
+  sel.innerHTML = '';
+  if (d && d.tags) {
+    d.tags.forEach(t => {
+      const opt = document.createElement('option');
+      opt.value = t; opt.textContent = t;
+      sel.appendChild(opt);
+    });
+    currentTag = d.tags[d.tags.length - 1] || '';
+    sel.value = currentTag;
+  }
+  sel.onchange = () => { currentTag = sel.value; loadAll(); };
+}
+
+function buildPostureTabs() {
+  ['postureTabs1','postureTabs2','postureTabs4'].forEach(id => {
+    const el = document.getElementById(id);
+    el.innerHTML = POSTURES.map(p =>
+      `<button class="${p === currentPosture ? 'active' : ''}"
+              onclick="setPosture('${p}')">${POSTURE_LABELS[p]}</button>`
+    ).join('');
+  });
+}
+
+function setPosture(p) {
+  currentPosture = p;
+  buildPostureTabs();
+  renderKPICards();
+  loadDecisions();
+  loadScatter();
+}
+
+async function loadAll() {
+  if (!currentTag) return;
+  setStatus('Cargando datos…');
+  await Promise.all([loadKPIs(), loadDecisions(), loadBacktest(), loadPostureAnalysis()]);
+  setStatus(`Datos cargados · tag=${currentTag} · ${new Date().toLocaleTimeString()}`);
+}
+
+function setStatus(msg) { document.getElementById('statusBar').textContent = msg; }
+
+// ═══════════════════════════════════════════════════════════════
+//  VISTA 1: KPI EXECUTIVE
+// ═══════════════════════════════════════════════════════════════
+async function loadKPIs() {
+  kpiData = await apiFetch(`/kpis/${currentTag}`) || {};
+  renderKPICards();
+  renderActionChart();
+  renderCapitalEvaChart();
+  renderComparisonChart();
+}
+
+function fmt(v, dec=1) {
+  if (v == null || isNaN(v)) return '—';
+  const m = v / 1e6;
+  return (m >= 0 ? '+' : '') + m.toFixed(dec) + ' M€';
+}
+
+function fmtPct(v) { return v != null ? v.toFixed(1) + '%' : '—'; }
+
+function semaphore(val, greenThreshold, amberThreshold) {
+  if (val >= greenThreshold) return 'green';
+  if (val >= amberThreshold) return 'amber';
+  return 'red';
+}
+
+function renderKPICards() {
+  const container = document.getElementById('kpiCards');
+  const p = kpiData.postures?.[currentPosture];
+  if (!p) { container.innerHTML = '<div class="loading">Sin datos para esta postura</div>'; return; }
+
+  const rorwa = p.rorwa_post || 0;
+  const rorwaSem = semaphore(rorwa, 10, 5);
+
+  container.innerHTML = `
+    <div class="card">
+      <div class="card-label">Préstamos</div>
+      <div class="card-value">${p.n_loans || 0}</div>
+      <div class="card-sub">Cartera ${POSTURE_LABELS[currentPosture]}</div>
+    </div>
+    <div class="card green">
+      <div class="card-label">ΔEVA Total</div>
+      <div class="card-value" style="color:${p.delta_eva >= 0 ? 'var(--ey-green)' : 'var(--ey-red)'}">
+        ${fmt(p.delta_eva)}
+      </div>
+      <div class="card-sub">EVA post: ${fmt(p.total_eva_post)}</div>
+    </div>
+    <div class="card blue">
+      <div class="card-label">Capital Liberado</div>
+      <div class="card-value">${fmt(p.capital_liberado)}</div>
+      <div class="card-sub">RWA: ${fmt(p.total_rwa_post, 0)} post</div>
+    </div>
+    <div class="card">
+      <div class="card-label">RORWA Post</div>
+      <div class="card-value">
+        <span class="semaphore ${rorwaSem}"></span>${fmtPct(rorwa)}
+      </div>
+      <div class="card-sub">Target (HR) = 10%</div>
+    </div>
+    <div class="card green">
+      <div class="card-label">MANTENER</div>
+      <div class="card-value" style="color:var(--ey-green)">${p.actions?.MANTENER || 0}</div>
+      <div class="card-sub">${((p.actions?.MANTENER||0)/p.n_loans*100).toFixed(1)}%</div>
+    </div>
+    <div class="card">
+      <div class="card-label">REESTRUCTURAR</div>
+      <div class="card-value" style="color:var(--ey-amber)">${p.actions?.REESTRUCTURAR || 0}</div>
+      <div class="card-sub">${((p.actions?.REESTRUCTURAR||0)/p.n_loans*100).toFixed(1)}%</div>
+    </div>
+    <div class="card red">
+      <div class="card-label">VENDER</div>
+      <div class="card-value" style="color:var(--ey-red)">${p.actions?.VENDER || 0}</div>
+      <div class="card-sub">${((p.actions?.VENDER||0)/p.n_loans*100).toFixed(1)}%</div>
+    </div>`;
+}
+
+function renderActionChart() {
+  destroyChart('chartActions');
+  const ctx = document.getElementById('chartActions')?.getContext('2d');
+  if (!ctx || !kpiData.postures) return;
+
+  const labels = POSTURES.map(p => POSTURE_LABELS[p]);
+  const datasets = ['MANTENER','REESTRUCTURAR','VENDER'].map(act => ({
+    label: act,
+    data: POSTURES.map(p => kpiData.postures[p]?.actions?.[act] || 0),
+    backgroundColor: COLORS[act] + '99',
+    borderColor: COLORS[act],
+    borderWidth: 1,
+  }));
+
+  charts.chartActions = new Chart(ctx, {
+    type: 'bar',
+    data: { labels, datasets },
+    options: chartOpts({ stacked: true, yTitle: 'Nº préstamos' }),
+  });
+}
+
+function renderCapitalEvaChart() {
+  destroyChart('chartCapitalEva');
+  const ctx = document.getElementById('chartCapitalEva')?.getContext('2d');
+  if (!ctx || !kpiData.postures) return;
+
+  const labels = POSTURES.map(p => POSTURE_LABELS[p]);
+  charts.chartCapitalEva = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'Capital Liberado (M€)',
+          data: POSTURES.map(p => (kpiData.postures[p]?.capital_liberado || 0) / 1e6),
+          backgroundColor: COLORS.prudencial + '88',
+          borderColor: COLORS.prudencial, borderWidth: 1,
+        },
+        {
+          label: 'ΔEVA (M€)',
+          data: POSTURES.map(p => (kpiData.postures[p]?.delta_eva || 0) / 1e6),
+          backgroundColor: '#FFE60088',
+          borderColor: '#FFE600', borderWidth: 1,
+        },
+      ],
+    },
+    options: chartOpts({ yTitle: 'M€' }),
+  });
+}
+
+function renderComparisonChart() {
+  destroyChart('chartComparison');
+  const ctx = document.getElementById('chartComparison')?.getContext('2d');
+  if (!ctx || !kpiData.postures) return;
+
+  const labels = POSTURES.map(p => POSTURE_LABELS[p]);
+  charts.chartComparison = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label: 'EVA Pre (M€)',
+          data: POSTURES.map(p => (kpiData.postures[p]?.total_eva_pre || 0) / 1e6),
+          backgroundColor: '#66666688', borderColor: '#666666', borderWidth: 1,
+        },
+        {
+          label: 'EVA Post (M€)',
+          data: POSTURES.map(p => (kpiData.postures[p]?.total_eva_post || 0) / 1e6),
+          backgroundColor: '#4ADE8088', borderColor: '#4ADE80', borderWidth: 1,
+        },
+      ],
+    },
+    options: chartOpts({ yTitle: 'M€' }),
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  VISTA 2: DECISION DETAIL
+// ═══════════════════════════════════════════════════════════════
+async function loadDecisions() {
+  decisionData = await apiFetch(`/decisions/${currentTag}/${currentPosture}`) || {};
+  renderDecisionTable(decisionData.loans || []);
+  loadScatter();
+}
+
+function renderDecisionTable(loans) {
+  const cont = document.getElementById('decisionTable');
+  if (!loans.length) { cont.innerHTML = '<div class="loading">Sin datos</div>'; return; }
+
+  const cols = ['loan_id','Accion_final','Reason_Code','segment','rating',
+                'EAD','PD','EVA_pre','EVA_post','capital_liberado','Explanation'];
+  const fmtCell = (col, v) => {
+    if (v == null) return '—';
+    if (col === 'Accion_final') return `<span class="action-badge action-${v}">${v}</span>`;
+    if (['EAD','EVA_pre','EVA_post','capital_liberado'].includes(col))
+      return typeof v === 'number' ? (v/1e6).toFixed(2) + ' M€' : v;
+    if (col === 'PD') return typeof v === 'number' ? (v*100).toFixed(1) + '%' : v;
+    if (col === 'Explanation') return `<span title="${String(v).replace(/"/g,'&quot;')}">${String(v).slice(0,50)}…</span>`;
+    return v;
+  };
+
+  cont.innerHTML = `
+    <table class="data-table" id="loanTable">
+      <thead><tr>${cols.map(c => `<th>${c}</th>`).join('')}</tr></thead>
+      <tbody>${loans.map(l => `<tr>${cols.map(c => `<td>${fmtCell(c, l[c])}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table>`;
+}
+
+function filterTable() {
+  const q = document.getElementById('filterSearch').value.toLowerCase();
+  const act = document.getElementById('filterAction').value;
+  const loans = (decisionData.loans || []).filter(l => {
+    if (act && l.Accion_final !== act) return false;
+    if (q) {
+      const text = [l.loan_id, l.segment, l.rating, l.Reason_Code, l.Explanation]
+        .filter(Boolean).join(' ').toLowerCase();
+      if (!text.includes(q)) return false;
+    }
+    return true;
+  });
+  renderDecisionTable(loans);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  VISTA 3: STRESS / BACKTEST
+// ═══════════════════════════════════════════════════════════════
+async function loadBacktest() {
+  const d = await apiFetch(`/stress/${currentTag}`) || {};
+  backtestData = d.backtesting_dynamic || [];
+  renderBacktestChart();
+  renderCuredChart();
+  renderRedefaultChart();
+  renderStressMatrix();
+}
+
+function renderBacktestChart() {
+  destroyChart('chartBacktest');
+  const ctx = document.getElementById('chartBacktest')?.getContext('2d');
+  if (!ctx || !backtestData.length) return;
+
+  const datasets = POSTURES.map(p => {
+    const rows = backtestData.filter(r => r.posture === p);
+    return {
+      label: POSTURE_LABELS[p],
+      data: rows.map(r => ({ x: +r.quarter, y: +r.total_EVA / 1e6 })),
+      borderColor: COLORS[p], backgroundColor: COLORS[p] + '22',
+      fill: true, tension: 0.3, pointRadius: 4,
+    };
+  });
+
+  charts.chartBacktest = new Chart(ctx, {
+    type: 'line',
+    data: { datasets },
+    options: chartOpts({ xTitle: 'Trimestre', yTitle: 'EVA Total (M€)', scatter: true }),
+  });
+}
+
+function renderCuredChart() {
+  destroyChart('chartCured');
+  const ctx = document.getElementById('chartCured')?.getContext('2d');
+  if (!ctx || !backtestData.length) return;
+  charts.chartCured = new Chart(ctx, {
+    type: 'line',
+    data: { datasets: POSTURES.map(p => ({
+      label: POSTURE_LABELS[p],
+      data: backtestData.filter(r=>r.posture===p).map(r=>({x:+r.quarter, y:+r.cumul_cured})),
+      borderColor: COLORS[p], tension: 0.3, pointRadius: 3,
+    }))},
+    options: chartOpts({ xTitle: 'Q', yTitle: 'Curados acum.', scatter: true }),
+  });
+}
+
+function renderRedefaultChart() {
+  destroyChart('chartRedefault');
+  const ctx = document.getElementById('chartRedefault')?.getContext('2d');
+  if (!ctx || !backtestData.length) return;
+  charts.chartRedefault = new Chart(ctx, {
+    type: 'line',
+    data: { datasets: POSTURES.map(p => ({
+      label: POSTURE_LABELS[p],
+      data: backtestData.filter(r=>r.posture===p).map(r=>({x:+r.quarter, y:+r.cumul_redefaulted})),
+      borderColor: COLORS[p], tension: 0.3, pointRadius: 3,
+    }))},
+    options: chartOpts({ xTitle: 'Q', yTitle: 'Re-defaults acum.', scatter: true }),
+  });
+}
+
+function renderStressMatrix() {
+  const cont = document.getElementById('stressMatrix');
+  const scenarios = ['baseline','mild','severe','pricing_crunch'];
+  const scenLabels = { baseline:'Base', mild:'Recesión leve', severe:'Recesión severa', pricing_crunch:'Crisis pricing' };
+
+  // Get last quarter EVA for each posture×scenario (from backtesting light if available)
+  // For now use backtesting_dynamic Q8 as proxy
+  const getQ8Eva = (posture) => {
+    const rows = backtestData.filter(r => r.posture === posture);
+    const last = rows[rows.length - 1];
+    return last ? (+last.total_EVA / 1e6).toFixed(1) : '—';
+  };
+
+  cont.innerHTML = `
+    <div class="stress-matrix">
+      <div class="stress-cell header">Escenario</div>
+      ${POSTURES.map(p => `<div class="stress-cell header">${POSTURE_LABELS[p]}</div>`).join('')}
+      ${scenarios.map(s => `
+        <div class="stress-cell scenario">${scenLabels[s]}</div>
+        ${POSTURES.map(p => {
+          const val = s === 'baseline' ? getQ8Eva(p) : '—';
+          const bg = val !== '—' && parseFloat(val) < 0 ? 'rgba(255,74,74,0.1)' : 'rgba(74,222,128,0.05)';
+          return `<div class="stress-cell" style="background:${bg}">${val} M€</div>`;
+        }).join('')}
+      `).join('')}
+    </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  VISTA 4: PORTFOLIO MAP
+// ═══════════════════════════════════════════════════════════════
+function loadScatter() {
+  destroyChart('chartScatter');
+  destroyChart('chartSegment');
+  destroyChart('chartRating');
+  const loans = decisionData.loans || [];
+  if (!loans.length) return;
+  renderScatterChart(loans);
+  renderSegmentChart(loans);
+  renderRatingChart(loans);
+}
+
+function renderScatterChart(loans) {
+  const ctx = document.getElementById('chartScatter')?.getContext('2d');
+  if (!ctx) return;
+
+  const datasets = ['MANTENER','REESTRUCTURAR','VENDER'].map(act => ({
+    label: act,
+    data: loans.filter(l => l.Accion_final === act).map(l => ({
+      x: +(l.PD || 0) * 100,
+      y: +(l.EAD || 0) / 1e6,
+    })),
+    backgroundColor: COLORS[act] + 'AA',
+    pointRadius: 5,
+    pointHoverRadius: 8,
+  }));
+
+  charts.chartScatter = new Chart(ctx, {
+    type: 'scatter',
+    data: { datasets },
+    options: chartOpts({ xTitle: 'PD (%)', yTitle: 'EAD (M€)', scatter: true }),
+  });
+}
+
+function renderSegmentChart(loans) {
+  const ctx = document.getElementById('chartSegment')?.getContext('2d');
+  if (!ctx) return;
+  const segments = {};
+  loans.forEach(l => { const s = l.segment || 'Unknown'; segments[s] = (segments[s]||0) + 1; });
+  const palette = ['#FFE600','#60A5FA','#4ADE80','#FF4A4A','#FBBF24','#A78BFA','#F472B6'];
+  charts.chartSegment = new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: Object.keys(segments),
+      datasets: [{ data: Object.values(segments), backgroundColor: palette.slice(0, Object.keys(segments).length) }],
+    },
+    options: { plugins: { legend: { position: 'right', labels: { color: '#fff', font: { size: 11 } } } } },
+  });
+}
+
+function renderRatingChart(loans) {
+  const ctx = document.getElementById('chartRating')?.getContext('2d');
+  if (!ctx) return;
+  const ratings = {};
+  loans.forEach(l => { const r = l.rating || '?'; ratings[r] = (ratings[r]||0) + 1; });
+  const sorted = Object.entries(ratings).sort((a,b) => b[1]-a[1]);
+  charts.chartRating = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: sorted.map(e => e[0]),
+      datasets: [{ data: sorted.map(e => e[1]), backgroundColor: '#FFE60088', borderColor: '#FFE600', borderWidth: 1 }],
+    },
+    options: chartOpts({ yTitle: 'Nº préstamos' }),
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  VISTA 5: POSTURE ANALYSIS
+// ═══════════════════════════════════════════════════════════════
+async function loadPostureAnalysis() {
+  const d = await apiFetch(`/posture-analysis/${currentTag}`) || {};
+  document.getElementById('postureAnalysisMd').textContent = d.markdown || 'No disponible.';
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  WHAT-IF
+// ═══════════════════════════════════════════════════════════════
+function showWhatIf() { document.getElementById('whatifPanel').style.display = 'block'; }
+function hideWhatIf() { document.getElementById('whatifPanel').style.display = 'none'; }
+async function launchWhatIf() {
+  const payload = {
+    tag: 'whatif_' + Date.now(),
+    n_loans: +document.getElementById('wiLoans').value,
+    posture: document.getElementById('wiPosture').value,
+    seed: +document.getElementById('wiSeed').value,
+    total_steps_loan: +document.getElementById('wiStepsLoan').value,
+    total_steps_portfolio: +document.getElementById('wiStepsPortfolio').value,
+    quarters_backtest: +document.getElementById('wiQuarters').value,
+  };
+  try {
+    await fetch(API + '/trigger-run', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify(payload) });
+    alert('✅ Run encolado: ' + payload.tag + '\nResultados en ~15 min.');
+    hideWhatIf();
+  } catch (e) { alert('❌ Error: ' + e.message); }
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  CHART HELPERS
+// ═══════════════════════════════════════════════════════════════
+function destroyChart(id) { if (charts[id]) { charts[id].destroy(); delete charts[id]; } }
+
+function chartOpts({ stacked, yTitle, xTitle, scatter } = {}) {
+  return {
+    responsive: true,
+    maintainAspectRatio: true,
+    plugins: { legend: { labels: { color: '#ccc', font: { size: 11 } } } },
+    scales: {
+      x: {
+        ...(scatter ? { type: 'linear' } : {}),
+        stacked: !!stacked,
+        ticks: { color: '#999', font: { size: 10 } },
+        grid: { color: 'rgba(255,255,255,0.06)' },
+        title: xTitle ? { display: true, text: xTitle, color: '#999' } : {},
+      },
+      y: {
+        stacked: !!stacked,
+        ticks: { color: '#999', font: { size: 10 } },
+        grid: { color: 'rgba(255,255,255,0.06)' },
+        title: yTitle ? { display: true, text: yTitle, color: '#999' } : {},
+      },
+    },
+  };
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  NAV
+// ═══════════════════════════════════════════════════════════════
+function showView(id, btn) {
+  document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
+  document.querySelectorAll('.nav button').forEach(b => b.classList.remove('active'));
+  document.getElementById(id).classList.add('active');
+  btn.classList.add('active');
+}
+</script>
+</body>
+</html>

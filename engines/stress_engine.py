@@ -1,7 +1,9 @@
-# ============================================
-# engines/stress_engine.py — Banco L1.5
-# Motor macro de estrés multi-periodo (BCE/EBA)
-# ============================================
+# -*- coding: utf-8 -*-
+# ============================================================
+# engines/stress_engine.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Motor macro de stress multi-periodo (BCE/EBA): aplica shocks parametrizados sobre la cartera y reejecuta la coordinación.
+# ============================================================
 
 import os, sys, yaml, argparse, logging, time
 import pandas as pd

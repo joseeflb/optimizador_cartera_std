@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-# ============================================
-# main.py — Orquestador del pipeline completo
-# Banco L1.5 · Método Estándar · PPO RL
-# ============================================
+# ============================================================
+# main.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Orquestador del pipeline completo: generación de cartera → entrenamiento → inferencia coordinada → reportes y artefactos.
+# ============================================================
 
 from __future__ import annotations
 

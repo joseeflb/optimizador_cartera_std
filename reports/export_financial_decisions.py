@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
-# ============================================
-# reports/export_financial_decisions.py — Informe financiero detallado
-# ============================================
+# ============================================================
+# reports/export_financial_decisions.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Informe financiero detallado por préstamo: justificación automática de la decisión (Δ EVA, capital, PTI/DSCR).
+# ============================================================
+
 """
 POC — OPTIMIZADOR DE CARTERAS EN DEFAULT (Método Estándar · Basilea III)
 Genera un informe financiero individualizado por préstamo tras la inferencia.
@@ -10,9 +13,6 @@ Incluye:
 - Justificación automática de decisión (mantener / reestructurar / vender)
 - Cálculos de impacto económico: ΔEVA, ΔRORWA, ROI y capital liberado
 - Exportación profesional a Excel y JSON
-
-NTT Data | 2025
-Autor: José María Fernández-Ladreda Ballvé
 """
 
 from __future__ import annotations

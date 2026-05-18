@@ -1,7 +1,9 @@
-# ============================================
-# multiagent/restruct_agent.py — Banco L1.5
-# Wrapper para optimize_restructure()
-# ============================================
+# -*- coding: utf-8 -*-
+# ============================================================
+# multiagent/restruct_agent.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Wrapper micro-agente de reestructuración (delega en optimizer.restructure_optimizer.optimize_restructure).
+# ============================================================
 
 from __future__ import annotations
 from typing import Dict, Any, Optional

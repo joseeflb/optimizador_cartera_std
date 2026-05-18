@@ -1,7 +1,9 @@
+# -*- coding: utf-8 -*-
+# ============================================================
 # reports/baseline_eval.py
-# Evaluación RL vs Baseline con columnas REALES del audit CSV del repo.
-# Mide guardrails: fire-sale, sell-blocked, reestructuras no viables/missing inputs.
-# Nota: No puede comparar EVA por acción (contrafactual) si no existe en el CSV; sí suma EVA_gain/PnL/capital_release del resultado elegido.
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Evaluación RL vs Baseline usando columnas reales del audit CSV (guardrails, fire-sale, EVA_gain, capital_release).
+# ============================================================
 
 from __future__ import annotations
 import os, glob

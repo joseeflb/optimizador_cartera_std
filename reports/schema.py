@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+# ============================================================
+# reports/schema.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Esquema canónico de columnas (CANON_COLS) y función enforce_schema() para estabilizar salidas Excel/CSV.
+# ============================================================
 from __future__ import annotations
 import numpy as np
 import pandas as pd

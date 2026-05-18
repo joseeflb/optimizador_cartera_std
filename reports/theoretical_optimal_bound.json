@@ -1,0 +1,37 @@
+{
+  "loan_agent": {
+    "agent": "loan",
+    "method": "greedy_rollout",
+    "n_episodes": 50,
+    "V_star_mean": -324.61074522046084,
+    "V_star_std": 10.314165697409674,
+    "V_star_min": -352.3561107873654,
+    "V_star_max": -304.13715603774546,
+    "optimal_action_distribution": {
+      "0": 574,
+      "1": 1876,
+      "2": 50
+    },
+    "optimal_action_pct": {
+      "0": 22.96,
+      "1": 75.03999999999999,
+      "2": 2.0
+    },
+    "random_baseline_mean": -311.0056379097316,
+    "ppo_mean_reward": -151.26,
+    "efficiency_vs_random_pct": -1174.2
+  },
+  "portfolio_agent": {
+    "agent": "portfolio",
+    "method": "greedy_rollout_upper_bound",
+    "n_episodes": 10,
+    "V_star_greedy_mean": -48.285963520145785,
+    "V_star_greedy_std": 0.0,
+    "V_star_greedy_min": -48.285963520145785,
+    "V_star_greedy_max": -48.285963520145785,
+    "hold_baseline_mean": -300.0,
+    "random_baseline_mean": -144.51822124676767,
+    "ppo_mean_reward": -48.54,
+    "efficiency_vs_random_pct": 99.7
+  }
+}

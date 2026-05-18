@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+# ============================================================
+# data/ingest_portfolio.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Ingesta y validación de carteras reales (Excel/CSV) con mapping a esquema canónico vía mappings/real_portfolio_mapping.yaml.
+# ============================================================
 import os
 import yaml
 import pandas as pd
@@ -128,15 +133,157 @@ def load_and_validate_portfolio(file_path: str) -> pd.DataFrame:
     if "loan_id" in df.columns:
         df = df.dropna(subset=["loan_id"])
         
-    # Feature Engineering for Model Compatibility (if needed)
-    # e.g., mapping rating string to number if not done elsewhere
-    # But usually policy_inference handles that, or expects mapped values.
-    
+    # Feature Engineering for Model Compatibility
+    # Derive fields required by the RL agents if not present in input data
+    df = _derive_model_features(df)
+
     # 5. Enforce Schema (canonical output)
     final_df = enforce_schema(df)
     logger.info(f"Ingestion complete. Final shape: {final_df.shape}")
     
     return final_df
+
+
+def _derive_model_features(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Derive financial features required by LoanEnv/PortfolioEnv
+    when they are missing from the input portfolio.
+    This enables usage with ANY bank portfolio, not just synthetic data.
+    """
+    CFG = cfg.CONFIG
+    npl = CFG.npl
+    reg = CFG.regulacion
+    hurdle = float(reg.hurdle_rate)
+    cap_ratio = float(reg.required_total_capital_ratio())
+
+    # --- loan_id: ensure exists ---
+    if "loan_id" not in df.columns:
+        df["loan_id"] = [f"L{i:06d}" for i in range(len(df))]
+
+    # --- EAD: must exist (validated above) ---
+    df["EAD"] = pd.to_numeric(df["EAD"], errors="coerce").fillna(0.0)
+
+    # --- PD: clamp to NPL conventions ---
+    if "PD" not in df.columns:
+        df["PD"] = npl.pd_default_floor
+    df["PD"] = df["PD"].clip(npl.pd_default_floor, npl.pd_default_cap)
+
+    # --- LGD: clamp ---
+    if "LGD" not in df.columns:
+        df["LGD"] = npl.lgd_default_floor
+    df["LGD"] = df["LGD"].clip(npl.lgd_default_floor, npl.lgd_default_cap)
+
+    # --- RW: resolve from Basel III STD if missing ---
+    if "RW" not in df.columns:
+        df["RW"] = 1.50  # default: unsecured NPL
+
+    # --- DPD: enforce NPL floor ---
+    if "DPD" not in df.columns:
+        df["DPD"] = npl.dpd_floor
+    df["DPD"] = df["DPD"].clip(npl.dpd_floor, npl.dpd_cap)
+
+    # --- RWA (Risk Weighted Assets) ---
+    if "RWA" not in df.columns:
+        df["RWA"] = df["EAD"] * df["RW"]
+
+    # --- EL (Expected Loss) ---
+    if "EL" not in df.columns:
+        horizon_years = float(getattr(CFG.sensibilidad_reestructura, "horizon_months", 24)) / 12.0
+        df["EL"] = df["EAD"] * df["PD"] * df["LGD"] * horizon_years
+
+    # --- NI (Net Income proxy) ---
+    if "NI" not in df.columns:
+        int_rate = df.get("interest_rate", pd.Series(0.05, index=df.index))
+        int_rate = pd.to_numeric(int_rate, errors="coerce").fillna(0.05)
+        df["NI"] = df["EAD"] * int_rate - df["EL"]
+
+    # --- EVA (Economic Value Added) ---
+    if "EVA" not in df.columns:
+        capital_locked = df["RWA"] * cap_ratio
+        cost_of_capital = capital_locked * hurdle
+        df["EVA"] = df["NI"] - cost_of_capital
+
+    # --- RORWA (Return on RWA) ---
+    if "RORWA" not in df.columns:
+        df["RORWA"] = np.where(
+            df["RWA"].abs() > 1.0,
+            df["NI"] / df["RWA"],
+            0.0
+        )
+
+    # --- RONA (Return on Net Assets) ---
+    if "RONA" not in df.columns:
+        df["RONA"] = df["RORWA"]
+
+    # --- rating_num ---
+    if "rating_num" not in df.columns:
+        rating_map = {"AAA": 7, "AA": 6, "A": 5, "BBB": 4, "BB": 3, "B": 2, "CCC": 1}
+        if "rating" in df.columns:
+            df["rating_num"] = df["rating"].map(rating_map).fillna(1).astype(int)
+        else:
+            df["rating_num"] = 1  # CCC default for NPL
+
+    # --- segmento_id ---
+    if "segmento_id" not in df.columns:
+        seg_map = {
+            "large_corporate": 0, "corporate": 1, "midcap": 2, "sme": 3,
+            "project_finance": 4, "mortgage": 5, "retail": 6, "consumer": 7,
+            "sovereign": 8, "bank": 9, "leasing": 10,
+        }
+        if "segment" in df.columns:
+            df["segmento_id"] = df["segment"].astype(str).str.lower().str.strip().map(seg_map).fillna(1).astype(int)
+        else:
+            df["segmento_id"] = 1
+
+    # --- secured ---
+    if "secured" not in df.columns:
+        if "collateral_value" in df.columns:
+            df["secured"] = (pd.to_numeric(df["collateral_value"], errors="coerce").fillna(0) > 0).astype(int)
+        elif "segment" in df.columns:
+            df["secured"] = df["segment"].astype(str).str.lower().str.contains("mortgage").astype(int)
+        else:
+            df["secured"] = 0
+
+    # --- coverage_rate & provisions ---
+    if "coverage_rate" not in df.columns:
+        df["coverage_rate"] = df["LGD"].clip(0.3, 0.95)
+    if "provisions" not in df.columns:
+        df["provisions"] = df["EAD"] * df["coverage_rate"]
+    if "book_value" not in df.columns:
+        df["book_value"] = df["EAD"] - df["provisions"]
+    if "book_value" in df.columns:
+        df["book_value"] = df["book_value"].clip(lower=0.0)
+
+    # --- PTI / DSCR ---
+    if "monthly_payment" not in df.columns:
+        remaining = pd.to_numeric(df.get("maturity_months_remaining",
+                     df.get("remaining_term", pd.Series(12, index=df.index))), errors="coerce").fillna(12).clip(lower=1)
+        df["maturity_months_remaining"] = remaining
+        int_rate = pd.to_numeric(df.get("interest_rate", pd.Series(0.05, index=df.index)), errors="coerce").fillna(0.05)
+        monthly_r = int_rate / 12.0
+        df["monthly_payment"] = np.where(
+            monthly_r > 0,
+            df["EAD"] * monthly_r / (1 - (1 + monthly_r) ** (-remaining)),
+            df["EAD"] / remaining,
+        )
+
+    if "monthly_income" not in df.columns:
+        df["monthly_income"] = df["monthly_payment"] * 3.5  # typical PTI ~28%
+    if "monthly_cfo" not in df.columns:
+        df["monthly_cfo"] = df["monthly_income"] * 0.85
+
+    if "PTI_pre" not in df.columns:
+        inc = pd.to_numeric(df["monthly_income"], errors="coerce").fillna(1.0).clip(lower=1.0)
+        df["PTI_pre"] = df["monthly_payment"] / inc
+    if "DSCR_pre" not in df.columns:
+        pmt = pd.to_numeric(df["monthly_payment"], errors="coerce").fillna(1.0).clip(lower=1.0)
+        df["DSCR_pre"] = pd.to_numeric(df["monthly_cfo"], errors="coerce").fillna(0) / pmt
+
+    n_derived = sum(1 for c in ("EVA", "RORWA", "RWA", "EL", "NI", "rating_num", "segmento_id")
+                    if c in df.columns)
+    logger.info(f"[DERIVE] {n_derived} model features available. Portfolio ready for inference.")
+
+    return df
 
 if __name__ == "__main__":
     # Test execution

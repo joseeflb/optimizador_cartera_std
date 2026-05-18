@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
+# ============================================================
 # baselines/baseline_policies.py
-# Definicion de politicas heuristicas (deterministas) para comparar contra RL.
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Políticas heurísticas deterministas (Prudencial / Desinversión) usadas como baseline frente al RL.
+# ============================================================
 
 import pandas as pd
 import numpy as np

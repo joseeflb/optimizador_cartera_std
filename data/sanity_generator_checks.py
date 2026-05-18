@@ -1,3 +1,9 @@
+# -*- coding: utf-8 -*-
+# ============================================================
+# data/sanity_generator_checks.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Sanity checks del generador sintético: distribuciones PD/LGD, % NI/EVA negativos, coherencia RW por segmento.
+# ============================================================
 import os, sys
 import pandas as pd
 import numpy as np

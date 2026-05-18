@@ -1,8 +1,9 @@
-# ========================================
-# Instalador inteligente de dependencias POC 2 (Santander – NTT Data)
-# Compatible con Python 3.14 (Windows-friendly)
-# SIN psycopg (dependencia opcional eliminada)
-# ========================================
+# -*- coding: utf-8 -*-
+# ============================================================
+# install_requirements_smart.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Instalador inteligente de dependencias (compatible con Python 3.14, sin psycopg).
+# ============================================================
 
 import importlib
 import subprocess

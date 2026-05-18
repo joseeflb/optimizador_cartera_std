@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+# ============================================================
+# tests/test_stress_pricing_crunch_effect.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Test del efecto pricing crunch en el motor de stress.
+# ============================================================
 """
 tests/test_stress_pricing_crunch_effect.py
 

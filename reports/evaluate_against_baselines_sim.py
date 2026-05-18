@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
+# ============================================================
 # reports/evaluate_against_baselines_sim.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Versión simulada de la evaluación contra baselines: reproduce decisiones en entorno controlado.
+# ============================================================
 
 import os
 import sys

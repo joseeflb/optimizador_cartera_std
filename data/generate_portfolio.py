@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+# ============================================================
+# data/generate_portfolio.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Generador de cartera sintética NPL (Basilea III STD): 100% default, RW vía mapping, PD forward, métricas contables (book value, coverage, provisions) y de viabilidad (PTI/DSCR).
+# ============================================================
 """
 ===============================================================================
  data/generate_portfolio.py — Generador de cartera sintética NPL (STD · Basilea III)

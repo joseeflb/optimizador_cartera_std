@@ -1,0 +1,74 @@
+{
+  "metadata": {
+    "timestamp": "20260222_132957",
+    "posture": "balanceado",
+    "tag": "infer1_severe",
+    "n_loans": 500
+  },
+  "pre_state": {
+    "n_loans": 500,
+    "total_eva": -711958584.6386319,
+    "total_rwa": 6106588854.0,
+    "total_ead": 4076826662.0,
+    "total_capital_release": 264223956.32592398,
+    "action_counts": {
+      "REESTRUCTURAR": 455,
+      "MANTENER": 45
+    },
+    "hhi_concentration": 0.207104,
+    "_meta": {
+      "cols_used": {
+        "EVA": "EVA_pre",
+        "RWA": "RWA_pre",
+        "EAD": "EAD",
+        "Action": "Accion_final"
+      }
+    }
+  },
+  "micro_proposal": {
+    "n_loans": 500,
+    "total_eva": 692618686.4556454,
+    "total_rwa": 3572867944.3245335,
+    "total_ead": 4076826662.0,
+    "total_capital_release": 264223956.32592398,
+    "action_counts": {
+      "REESTRUCTURAR": 455,
+      "MANTENER": 45
+    },
+    "hhi_concentration": 0.207104,
+    "_meta": {
+      "cols_used": {
+        "EVA": "EVA_post",
+        "RWA": "RWA_post",
+        "EAD": "EAD",
+        "Action": "Accion"
+      }
+    }
+  },
+  "final_state": {
+    "n_loans": 500,
+    "total_eva": 692618686.4556454,
+    "total_rwa": 3572867944.3245335,
+    "total_ead": 4076826662.0,
+    "total_capital_release": 165320979.23661858,
+    "action_counts": {
+      "REESTRUCTURAR": 242,
+      "MANTENER": 208,
+      "VENDER": 50
+    },
+    "hhi_concentration": 0.207104,
+    "_meta": {
+      "cols_used": {
+        "EVA": "EVA_post",
+        "RWA": "RWA_post",
+        "EAD": "EAD",
+        "Action": "Accion_final"
+      }
+    }
+  },
+  "delta_impact": {
+    "total_eva": 1404577271.0942774,
+    "total_rwa": -2533720909.6754665,
+    "capital_release": 165320979.23661858
+  }
+}

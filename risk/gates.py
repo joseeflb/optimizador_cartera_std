@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+# ============================================================
+# risk/gates.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Funciones puras y deterministas de gates: viabilidad de reestructuración (DSCR) y fire-sale de venta.
+# ============================================================
 """Centralized gate checks (pure, deterministic)."""
 from __future__ import annotations
 

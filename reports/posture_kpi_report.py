@@ -1,3 +1,9 @@
+# -*- coding: utf-8 -*-
+# ============================================================
+# reports/posture_kpi_report.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: KPIs ejecutivos por postura: distribución de acciones, reason codes, EVA, capital liberado.
+# ============================================================
 from __future__ import annotations
 
 import argparse

@@ -20,6 +20,7 @@ INDICE
      3.9  Motor de estres multi-escenario
      3.10 Comparativa de posturas y backtesting
      3.11 Committee pack
+     3.12 NPL workout layer (analisis de postura, carve-out, governance)
   4. Resultados: donde encontrarlos y que se ve en cada uno
   5. Escenarios y posturas de riesgo
   6. Scripts de automatizacion y CI
@@ -392,6 +393,79 @@ SHA-256 de todos los modelos y lista de artefactos.
 
 Invocacion: .\.venv\Scripts\python reports\make_committee_pack.py --tag mi_run
 
+----------------------------------------------------------------------
+
+3.12. reports/npl_posture_analysis.py -- NPL Workout Layer
+----------------------------------------------------------
+QUE APORTA: Capa de analisis post-inferencia que implementa floors de reserva
+individuales, bandas de concesion con margen de seguridad DSCR, carve-out de
+viabilidad para PRUDENCIAL y distance checks de coherencia entre posturas.
+
+Modulos funcionales:
+
+  _per_loan_floor (Floors por prestamo)
+  ......................................
+  floor_i = max(Price_to_EAD_i x mult_postura, min_floor_postura)
+  Multiplicadores: PRUD=0.945 (~p40), BALANC=0.873 (~p27), DESINV=0.779 (~p13).
+  Sustituye el floor global anterior.
+
+  CONCESSION_BAND (Bandas de concesion + safety band)
+  ....................................................
+  Define dscr_min_wa, dscr_safety_band, quita_max, tasa_min y pti_max_wa por
+  postura. Reestructuras con DSCR_post en [dscr_min_wa, dscr_min_wa+safety)
+  reciben flag REVIEW_REQUIRED.
+
+  apply_prudencial_carve_out (PRUDENCIAL carve-out)
+  .................................................
+  3 niveles DSCR consecutivos:
+    L1: DSCR_post >= 1.50 (CLEAN)
+    L2: DSCR_pre  >= 0.65 (CANDIDATE)
+    L3: EVA-only (EVA_SIGNAL)
+  Eleva MANTENER -> REESTRUCTURAR en prestamos con EVA top 20%, PTI<=35%,
+  quita<=3%, tasa>=10%.
+  RC: RC03_PRUDENCIAL_CARVEOUT_CLEAN / CANDIDATE / EVA_SIGNAL.
+
+  run_distance_checks (Distance checks)
+  .....................................
+  6 checks de separacion entre posturas:
+    SellRate_Desinv_minus_Balanc    (thr >= 0.10)
+    SellRate_Balanc_minus_Prud      (thr >= 0.10)
+    CapRelease_Desinv_minus_Balanc  (thr >= 50M EUR)
+    CapRelease_Balanc_minus_Prud    (thr >= 100M EUR)
+    RestRate_Balanc_higher_Desinv   (thr >= -0.05)
+    EVA_Prud_highest                (thr >= 0)
+  Genera enforcement_log_<tag>.csv (ALL PASS en condiciones normales).
+
+  Markdowns de governance
+  .......................
+  POSTURE_ANALYSIS_NPL_<tag>.md : S1 distribucion de acciones, S2 floors/bandas/
+    carve-out params, S3 por postura con top-10 frontier loans, S4 distance checks.
+  CIB_GOVERNANCE_NPL_<tag>.md   : analisis CIB-style para comite de credito.
+    Incluye KPI summary cross-postura, reconciliacion Set S (DESINV=MANTENER,
+    BALANC!=MANTENER -> C1/C2/C3), recomendaciones GV-01/GV-02/GV-03.
+
+  decisions_comparison_<tag>.xlsx
+  ...............................
+  Tabla comparativa wide: una fila por prestamo con las 3 posturas como columnas,
+  incluyendo Accion_final, Reason_Code, EAD, DSCR_post, EVA_post.
+
+FIX GV-03: apply_negotiation_envelopes() (carve-out) se ejecuta ANTES que
+diagnose_posture() para que los conteos de S1 reflejen el estado post-carve-out.
+
+agent/coordinator_inference.py implementa el mismo carve-out en produccion
+mediante _apply_prudencial_carve_out() y el dict _PRUDENCIAL_CARVE_OUT_PARAMS,
+invocado al final de _combine_decisions().
+
+Invocacion:
+  .\.venv\Scripts\python -m reports.npl_posture_analysis --tag <tag>
+
+Salidas en reports/:
+  POSTURE_ANALYSIS_NPL_<tag>.md
+  CIB_GOVERNANCE_NPL_<tag>.md
+  enforcement_log_<tag>.csv
+  decisions_comparison_<tag>.xlsx
+  decisiones_finales_<postura>_npl.xlsx
+
 
 ================================================================================
 4. RESULTADOS: DONDE ENCONTRARLOS Y QUE SE VE EN CADA UNO
@@ -595,6 +669,43 @@ ejecuto desde el commit exacto registrado.
 Para visualizar curvas de entrenamiento:
   tensorboard --logdir logs/tb
 
+----------------------------------------------------------------------
+
+4.11. Outputs del NPL Workout Layer
+------------------------------------
+
+  POSTURE_ANALYSIS_NPL_<tag>.md
+    Analisis NPL completo. S1: distribucion de acciones post-carve-out.
+    S2: parametros floors por prestamo, bandas de concesion y carve-out
+    PRUDENCIAL. S3: ficha por postura con top-10 frontier loans y columnas
+    de envelope. S4: resultado de los 6 distance checks.
+
+  CIB_GOVERNANCE_NPL_<tag>.md
+    Documento CIB-style para comite de credito. KPI summary cross-postura,
+    checks de monotonia con root cause, justificacion del perfil MANTENER de
+    PRUDENCIAL, reconciliacion Set S (DESINV=MANTENER, BALANC!=MANTENER ->
+    C1/C2/C3), recomendaciones GV-01/GV-02/GV-03.
+
+  enforcement_log_<tag>.csv
+    Log de los 6 distance checks. Columnas: check, value, threshold,
+    direction, status. En condiciones normales: 6/6 PASS, enforcements=[].
+    Checks: SellRate_Desinv_minus_Balanc, SellRate_Balanc_minus_Prud,
+    CapRelease_Desinv_minus_Balanc, CapRelease_Balanc_minus_Prud,
+    RestRate_Balanc_higher_Desinv, EVA_Prud_highest.
+
+  decisiones_finales_<postura>_npl.xlsx
+    Excel NPL enriquecido (dentro de coordinated_inference_<tag>_*_<postura>/)
+    con columnas de envelope para workflow de workout: Envelope_Type,
+    Indicative_Bid_Range, Reservation_Floor, Execution_Rule_Text,
+    Anchor_Terms, Concession_Band, WalkAway_Rule_Text, Fallback_Reason,
+    Trigger_to_Action, Carve_Out_Type, Decision_Governance_Final.
+
+  decisions_comparison_<tag>.xlsx
+    Tabla comparativa wide en reports/. Una fila por loan_id con
+    Accion_final, Reason_Code, EAD, DSCR_post, EVA_post de las 3 posturas
+    lado a lado (16 cols). Incluye flag de anomalias (inversiones de
+    decision PRUD=VENDER & DESINV=MANTENER).
+
 
 ================================================================================
 5. ESCENARIOS Y POSTURAS DE RIESGO
@@ -708,6 +819,10 @@ ci_local.bat -- Steps del CI completo:
   |-- compare_postures_<tag>.csv      <- comparativa side-by-side de posturas
   |-- backtesting_light_<tag>.csv     <- backtesting vs. baselines
   |-- backtesting_light_<tag>.md      <- informe backtesting en Markdown
+  |-- POSTURE_ANALYSIS_NPL_<tag>.md   <- analisis NPL (floors, bandas, carve-out, distance checks)
+  |-- CIB_GOVERNANCE_NPL_<tag>.md     <- documento governance CIB para comite
+  |-- enforcement_log_<tag>.csv       <- 6 distance checks (ALL PASS en condiciones normales)
+  |-- decisions_comparison_<tag>.xlsx <- tabla comparativa wide 3 posturas x N loans
   |-- stress_<tag>_<timestamp>/
   |   |-- <escenario>/
   |   |   `-- <postura>/
@@ -719,6 +834,7 @@ ci_local.bat -- Steps del CI completo:
   |   `-- portfolio_<escenario>.xlsx
   |-- coordinated_inference_<tag>_<timestamp>_<postura>/
   |   |-- decisiones_finales_<postura>.xlsx
+  |   |-- decisiones_finales_<postura>_npl.xlsx  <- version NPL con columnas envelope
   |   |-- overrides_log_<postura>.csv
   |   `-- portfolio_kpis_<postura>.json
   |-- inference_<timestamp>_<tag>/
@@ -776,6 +892,19 @@ El proyecto mantiene trazabilidad completa en todos los niveles:
 
 Pack definitivo PC10: reports/committee_pack_pc10_hardening_final_20260221_202331/
   (commit=e51b40d, status=clean)
+
+Ultimo run validado -- NPL Workout Layer (2026-02-22): tag infer_ci0226.
+Resultados post-carve-out:
+  PRUDENCIAL   : 55V / 45R / 400M  (45 carve-outs L1-CLEAN, DSCR_post>=1.50)
+  BALANCEADO   : 168V / 244R / 88M
+  DESINVERSION : 408V / 5R / 87M
+Capital release monotonica: PRUD 283M <= BALANC 283M <= DESINV 641M.
+Distance checks: 6/6 PASS. 1 inversion puntual (L000468 EAD=82M, justificada
+por proteccion fire-sale en prestamos grandes).
+Salidas:
+  reports/POSTURE_ANALYSIS_NPL_infer_ci0226.md
+  reports/CIB_GOVERNANCE_NPL_infer_ci0226.md
+  reports/decisions_comparison_infer_ci0226.xlsx
 
 config.py es la pieza central que garantiza coherencia entre todos los
 componentes: entornos RL, motores financieros, engines y agentes importan de un

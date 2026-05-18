@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+# ============================================================
+# tests/test_committee_pack.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Valida que make_committee_pack genera todos los artefactos exigidos.
+# ============================================================
 import os
 import sys
 import pytest

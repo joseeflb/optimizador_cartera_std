@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
-# ============================================
-# agent/policy_inference.py — Inferencia de políticas PPO (Banco L1.5 + trazabilidad)
-# (CORREGIDO v3.6.3 · Logging FIX + Fire-Sale Threshold dinámico + Gate DSCR + KEEP boost + Safety)
-# ============================================
+# ============================================================
+# agent/policy_inference.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Inferencia del modelo PPO sobre carteras reales o sintéticas con heurística financiera prioritaria + PPO como desempate y gates de fire-sale/DSCR.
+# ============================================================
 
 """
 POC — OPTIMIZADOR DE CARTERAS EN DEFAULT (Método Estándar · Basilea III)
 Inferencia del modelo PPO sobre carteras reales o sintéticas.
-Autor: José María Fernández-Ladreda Ballvé
 
 Heurística financiera PRIORITARIA + PPO solo como desempate en banda ambigua.
 

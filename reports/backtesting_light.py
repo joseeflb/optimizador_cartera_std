@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-# ============================================
+# ============================================================
 # reports/backtesting_light.py
-# "What-If" Analysis on Frozen Decisions
-# ============================================
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: What-If sobre decisiones congeladas: aplica shocks a posteriori sin re-entrenamiento.
+# ============================================================
 
 import os
 import sys

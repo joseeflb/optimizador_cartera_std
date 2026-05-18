@@ -1,3 +1,9 @@
+# -*- coding: utf-8 -*-
+# ============================================================
+# tests/conftest.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Fixtures pytest comunes (DataFrame mínimo) compartidas por el banco de pruebas.
+# ============================================================
 import pytest
 import pandas as pd
 import numpy as np

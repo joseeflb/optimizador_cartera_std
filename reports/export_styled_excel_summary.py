@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-# ============================================
+# ============================================================
 # reports/export_styled_excel_summary.py
-# — Styler RUN-LEVEL para summary_consolidated (no requiere loan_id)
-# ============================================
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Styler RUN-LEVEL para summary_consolidated.xlsx (no requiere loan_id).
+# ============================================================
 
 from __future__ import annotations
 import os

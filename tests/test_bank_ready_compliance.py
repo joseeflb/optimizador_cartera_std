@@ -1,3 +1,9 @@
+# -*- coding: utf-8 -*-
+# ============================================================
+# tests/test_bank_ready_compliance.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Verifica que las decisiones REESTRUCTURAR cumplen PTI/DSCR y que EVA mejora.
+# ============================================================
 import pytest
 import pandas as pd
 import numpy as np

@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
+# ============================================================
 # optimizer/guardrails.py
-# Modulo de restricciones duras (Hard Constraints) para acciones de gestion de cartera.
-# Implementa logica determinista "Bank-Ready" para validar REESTRUCTURACIONES y VENTAS.
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Restricciones duras (hard constraints) bank-ready para REESTRUCTURAR y VENDER (PTI, DSCR, fire-sale, mejora EVA).
+# ============================================================
 
 import logging
 from typing import Dict, Any, List, Tuple
@@ -142,17 +144,24 @@ def check_sell_constraints(loan_state: Dict[str, Any], pricing_out: Dict[str, An
     if bid_price < (ead * min_bid_pct_ead):
         reasons.append(f"BID_TOO_LOW (<{min_bid_pct_ead*100:.0f}% EAD)")
 
-    # 5. Guardrail: Perdida Excesiva (Prudencial)
-    # Si la perdida supera el X% del EAD, quiza sea "Fire Sale" inaceptable.
-    # Esto depende de si la estrategia permite o no Fire Sale, pero aqui ponemos un "Hard Cap"
-    # de prudencia extrema (ej. no perder el 40% del EAD en una venta).
+    # 5. Guardrail: Perdida Excesiva (posture-aware)
+    # La perdida maxima aceptable depende de la postura de riesgo.
     loss_absolute = -pnl if pnl < 0 else 0.0
-    if loss_absolute > (ead * max_loss_pct_ead_pru):
-        # AQUI podriamos flexibilizar si la estrategia es DESINVERSION.
-        # Por ahora lo dejamos como warning o hard block segun apetito.
-        # Vamos a hacerlo HARD BLOCK para postura PRUDENCIAL/BALANCEADO.
-        # TODO: Detectar postura del config_obj si existe
-        reasons.append(f"PNL_TOO_NEGATIVE_PRUDENCIAL (Loss > {max_loss_pct_ead_pru*100:.0f}% EAD)")
+
+    # Derive posture-specific threshold from config_obj if available
+    actual_max_loss_pct = max_loss_pct_ead_pru  # default 40%
+    if config_obj and hasattr(config_obj, "risk_params"):
+        rp = config_obj.risk_params
+        if hasattr(rp, "pnl_max_loss_pct_ead"):
+            actual_max_loss_pct = float(rp.pnl_max_loss_pct_ead)
+    # Provide per-posture defaults via config dict fallback
+    if config_obj and hasattr(config_obj, "_posture"):
+        posture = str(config_obj._posture).lower()
+        posture_defaults = {"prudencial": 0.40, "balanceado": 0.60, "desinversion": 0.85}
+        actual_max_loss_pct = posture_defaults.get(posture, actual_max_loss_pct)
+
+    if loss_absolute > (ead * actual_max_loss_pct):
+        reasons.append(f"PNL_TOO_NEGATIVE (Loss > {actual_max_loss_pct*100:.0f}% EAD)")
 
     # 6. Guardrail: Capital Release
     # No vender si no libera capital (ej. RWA ya era 0 o pnl muy negativo come capital)

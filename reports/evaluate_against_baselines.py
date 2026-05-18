@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
+# ============================================================
 # reports/evaluate_against_baselines.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Evaluación cuantitativa del RL frente a las políticas heurísticas (Prudencial/Desinversión) sobre carteras reales.
+# ============================================================
 
 import os
 import sys

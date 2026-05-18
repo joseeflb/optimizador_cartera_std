@@ -1,4 +1,10 @@
+# -*- coding: utf-8 -*-
+# ============================================================
 # tests/test_guardrails_restructure.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Tests unitarios del guardrail de reestructuración (PTI, DSCR, mejora EVA).
+# ============================================================
+
 import pytest
 from optimizer.guardrails import check_restructure_constraints
 

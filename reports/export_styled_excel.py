@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
-# ============================================
-# export_styled_excel.py — v7.5 (CIB Executive Notes · COORD-aware)
-# ============================================
+# ============================================================
+# reports/export_styled_excel.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Exporta el Excel corporativo CIB-style (decisiones, resumen_segmento, resumen_global, parámetros) con comentarios hover ejecutivos.
+# ============================================================
+
 """
 Excel corporativo con:
 • Comentarios hover estilo ejecutivo CIB (muy breves, sin scroll)

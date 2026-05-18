@@ -1,7 +1,9 @@
-# ============================================
-# multiagent/pricing_agent.py — Banco L1.5
-# Wrapper para simulate_npl_price()
-# ============================================
+# -*- coding: utf-8 -*-
+# ============================================================
+# multiagent/pricing_agent.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Wrapper micro-agente de pricing (delega en optimizer.price_simulator.simulate_npl_price).
+# ============================================================
 
 from __future__ import annotations
 from typing import Dict, Any, Optional

@@ -1,3 +1,9 @@
+# -*- coding: utf-8 -*-
+# ============================================================
+# tests/test_postures_differentiation.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Valida la diferenciación cuantitativa entre posturas (monotonías esperadas).
+# ============================================================
 import pandas as pd
 import pytest
 import os

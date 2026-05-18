@@ -1,3 +1,9 @@
+# -*- coding: utf-8 -*-
+# ============================================================
+# tests/test_coordinator_overrides.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Tests deterministas del arbitraje del coordinador (PRUDENCIAL_FIRST, conflicto micro/macro).
+# ============================================================
 
 import pytest
 import pandas as pd

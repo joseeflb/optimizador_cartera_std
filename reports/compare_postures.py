@@ -1,4 +1,9 @@
 # -*- coding: utf-8 -*-
+# ============================================================
+# reports/compare_postures.py
+# Autor: José María Fernández-Ladreda Ballvé
+# Resumen: Comparativa de outputs entre posturas (Prudencial/Balanceado/Desinversión) recogiendo los runs recientes.
+# ============================================================
 import os
 import glob
 import json
